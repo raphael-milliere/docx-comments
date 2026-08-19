@@ -23,7 +23,7 @@ from docx_comments.xml_parts import (
 )
 
 if TYPE_CHECKING:
-    from docx import Document
+    from docx.document import Document
     from docx.text.paragraph import Paragraph
 
 
@@ -32,8 +32,19 @@ NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS_W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
 NS_W15 = "http://schemas.microsoft.com/office/word/2012/wordml"
 NS_W16CID = "http://schemas.microsoft.com/office/word/2016/wordml/cid"
+NS_XML = "http://www.w3.org/XML/1998/namespace"
+NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 
 PersonSpec = Union[PersonInfo, str, dict[str, Any], bool]
+
+# Private RNG so consumer calls to random.seed() cannot make id sequences
+# collide across comments.
+_rng = random.Random()
+
+# w:id values are ST_DecimalNumber; the OOXML ecosystem (Word, the Open XML
+# SDK, python-docx, LibreOffice) treats them as 32-bit signed integers, so
+# generated ids must stay within that range.
+_MAX_ID = 0x7FFFFFFE
 
 
 def _qn(ns: str, name: str) -> str:
@@ -42,23 +53,13 @@ def _qn(ns: str, name: str) -> str:
 
 
 def _generate_id() -> str:
-    """Generate a random comment ID (large positive integer as string)."""
-    return str(random.randint(1_000_000_000, 9_999_999_999))
+    """Generate a random comment ID (positive 32-bit integer as string)."""
+    return str(_rng.randint(1, _MAX_ID))
 
 
 def _generate_long_hex_id() -> str:
     """Generate an 8-hex-digit ST_LongHexNumber within the valid range."""
-    return f"{random.randint(1, 0x7FFFFFFE):08X}"
-
-
-def _generate_para_id() -> str:
-    """Generate a paragraph ID (8 uppercase hex characters)."""
-    return _generate_long_hex_id()
-
-
-def _generate_durable_id() -> str:
-    """Generate a durable ID (8 uppercase hex characters)."""
-    return _generate_long_hex_id()
+    return f"{_rng.randint(1, _MAX_ID):08X}"
 
 
 def _format_utc(dt: datetime) -> str:
@@ -79,6 +80,19 @@ def _parse_comment_date(date_str: Optional[str]) -> Optional[datetime]:
         return parsed.astimezone(timezone.utc)
     except ValueError:
         return None
+
+
+def _validate_xml_text(value: Optional[str], what: str) -> None:
+    """Raise a clear ValueError when a string cannot be stored in XML."""
+    if value is None:
+        return
+    probe = etree.Element("probe")
+    try:
+        probe.text = value
+    except ValueError as exc:
+        raise ValueError(
+            f"{what} contains characters not allowed in XML: {exc}"
+        ) from exc
 
 
 class CommentManager:
@@ -119,33 +133,111 @@ class CommentManager:
         """
         Initialize CommentManager with a python-docx Document.
 
+        Comment parts are created lazily on the first mutating operation, so
+        a manager used only for reading leaves the document untouched.
+
         Args:
             document: A python-docx Document instance.
-            auto_migrate: Whether to backfill missing comment metadata on init.
+            auto_migrate: Whether to backfill missing comment metadata on init
+                (this creates the comment parts if they are missing).
         """
         self._document = document
         self._comments_handler: Optional[CommentsPart] = None
-        self._ensure_parts()
         if auto_migrate:
             self.migrate_comment_metadata()
 
     def _ensure_parts(self) -> None:
         """Ensure all required comment parts exist in the document."""
         ensure_comment_parts(self._document)
-        # Cache the comments part handler
-        self._comments_handler = CommentsPart(self._document)
+
+    def _comments_part(self) -> CommentsPart:
+        """Get the cached comments part handler."""
+        if self._comments_handler is None:
+            self._comments_handler = CommentsPart(self._document)
+        return self._comments_handler
 
     @property
     def _comments_xml(self) -> etree._Element:
         """Get the comments.xml root element."""
-        if self._comments_handler is None:
-            self._comments_handler = CommentsPart(self._document)
-        return self._comments_handler.xml
+        return self._comments_part().xml
 
     def _save_comments(self) -> None:
         """Save changes to comments.xml."""
         if self._comments_handler is not None:
             self._comments_handler._save()
+
+    def _comment_id_exists(self, comment_id: str) -> bool:
+        """Check whether comments.xml contains a comment with this id."""
+        for elem in self._comments_xml.findall(_qn(NS_W, "comment")):
+            if elem.get(_qn(NS_W, "id")) == comment_id:
+                return True
+        return False
+
+    def _anchor_roots(self) -> list[etree._Element]:
+        """XML roots that can carry anchors (body, headers/footers, notes)."""
+        return list(CommentAnchor(self._document)._iter_anchor_roots())
+
+    def _new_comment_id(self) -> str:
+        """Generate a comment id unique within the document."""
+        used: set[str] = set()
+        for elem in self._comments_xml.findall(_qn(NS_W, "comment")):
+            value = elem.get(_qn(NS_W, "id"))
+            if value:
+                used.add(value)
+        # Anchors may reference ids with no comment element (other tools);
+        # avoid colliding with those too, in every anchor-bearing part.
+        for root in self._anchor_roots():
+            for tag in ("commentRangeStart", "commentRangeEnd", "commentReference"):
+                for elem in root.iter(_qn(NS_W, tag)):
+                    value = elem.get(_qn(NS_W, "id"))
+                    if value:
+                        used.add(value)
+        while True:
+            candidate = _generate_id()
+            if candidate not in used:
+                return candidate
+
+    def _used_long_hex_ids(self) -> set[str]:
+        """Collect ST_LongHexNumber values already present in the document.
+
+        Covers comment paraId/textId, paragraph paraIds in every story part
+        (body, headers/footers, footnotes/endnotes), threading entries,
+        durable ids, and commentsExtensible entries: new ids are drawn
+        outside this pool so they cannot collide.
+        """
+        used: set[str] = set()
+        for comment_elem in self._comments_xml.findall(_qn(NS_W, "comment")):
+            for para in comment_elem.findall(_qn(NS_W, "p")):
+                for attr in ("paraId", "textId"):
+                    value = para.get(_qn(NS_W14, attr))
+                    if value:
+                        used.add(value.upper())
+        for root in self._anchor_roots():
+            for para in root.iter(_qn(NS_W, "p")):
+                value = para.get(_qn(NS_W14, "paraId"))
+                if value:
+                    used.add(value.upper())
+        used.update(
+            pid.upper()
+            for pid in CommentsExtendedPart(self._document).get_threading_info()
+        )
+        for para_id, durable_id in CommentsIdsPart(self._document).get_durable_ids().items():
+            used.add(para_id.upper())
+            used.add(durable_id.upper())
+        used.update(
+            durable.upper()
+            for durable in CommentsExtensiblePart(self._document).get_extensible_info()
+        )
+        return used
+
+    @staticmethod
+    def _new_long_hex_id(used: set[str]) -> str:
+        """Draw a fresh hex id outside `used`, adding it to the set."""
+        while True:
+            candidate = _generate_long_hex_id()
+            if candidate not in used:
+                used.add(candidate)
+                return candidate
 
     def _comment_index(
         self,
@@ -169,7 +261,9 @@ class CommentManager:
 
     @staticmethod
     def _thread_key(comment: CommentInfo) -> str:
-        return comment.para_id or comment.comment_id
+        # Degenerate comments may lack both ids; key them by object identity
+        # so they form singleton threads instead of aliasing to one key.
+        return comment.para_id or comment.comment_id or f"__anon_{id(comment)}"
 
     def _thread_comments_for(self, comment_id: str) -> list[CommentInfo]:
         comments, by_id, by_para_id = self._comment_index()
@@ -224,13 +318,14 @@ class CommentManager:
             extensible_part.remove_comment_extensible(durable_id)
 
     def _detach_orphan_replies(self, valid_para_ids: set[str]) -> None:
+        # Read the raw threading entries (not list_comments, which normalizes
+        # dangling parents away) so the stale w15:paraIdParent attributes are
+        # actually removed from the saved XML.
         ext_part = CommentsExtendedPart(self._document)
-        for comment in self.list_comments():
-            if not comment.para_id:
-                continue
-            parent = comment.parent_para_id
+        for para_id, info in ext_part.get_threading_info().items():
+            parent = info.get("parent_para_id")
             if parent and parent not in valid_para_ids:
-                ext_part.set_parent(comment.para_id, None)
+                ext_part.set_parent(para_id, None)
 
     def migrate_comment_metadata(self) -> None:
         """
@@ -241,6 +336,9 @@ class CommentManager:
         - commentsExtended.xml entries (commentEx)
         - commentsIds.xml entries (durableId)
         - commentsExtensible.xml entries (commentExtensible)
+
+        Also removes metadata entries that no longer match any comment
+        paragraph and detaches replies whose parent no longer exists.
         """
         ensure_comment_parts(self._document)
 
@@ -251,21 +349,52 @@ class CommentManager:
         durable_ids = ids_part.get_durable_ids()
         extensible_info = extensible_part.get_extensible_info()
 
+        comment_elems = self._comments_xml.findall(_qn(NS_W, "comment"))
         updated_comments = False
 
-        for comment_elem in self._comments_xml.findall(_qn(NS_W, "comment")):
+        # When exactly one comment paragraph lost its w14:paraId and exactly
+        # one metadata entry is unclaimed, reuse the old paraId — but only
+        # when independent evidence (matching dateUtc) ties the entry to this
+        # comment, so orphan metadata from a deleted comment cannot be
+        # grafted onto an unrelated one.
+        existing_para_ids: set[str] = set()
+        missing_paras: list[etree._Element] = []
+        for comment_elem in comment_elems:
+            for para in comment_elem.findall(_qn(NS_W, "p")):
+                pid = para.get(_qn(NS_W14, "paraId"))
+                if pid:
+                    existing_para_ids.add(pid)
+                else:
+                    missing_paras.append(para)
+        unclaimed = {pid for pid in threading if pid not in existing_para_ids}
+        unclaimed.update(pid for pid in durable_ids if pid not in existing_para_ids)
+        if len(missing_paras) == 1 and len(unclaimed) == 1:
+            candidate = unclaimed.pop()
+            para = missing_paras[0]
+            owner = para.getparent()
+            while owner is not None and etree.QName(owner).localname != "comment":
+                owner = owner.getparent()
+            if owner is not None and self._para_id_reuse_corroborated(
+                owner, candidate, durable_ids, extensible_info
+            ):
+                para.set(_qn(NS_W14, "paraId"), candidate)
+                updated_comments = True
+
+        used_hex_ids = self._used_long_hex_ids()
+
+        for comment_elem in comment_elems:
             para_ids = []
             for para in comment_elem.findall(_qn(NS_W, "p")):
                 para_id = para.get(_qn(NS_W14, "paraId"))
                 if not para_id:
-                    para_id = _generate_para_id()
+                    para_id = self._new_long_hex_id(used_hex_ids)
                     para.set(_qn(NS_W14, "paraId"), para_id)
                     updated_comments = True
                 para_ids.append(para_id)
 
                 text_id = para.get(_qn(NS_W14, "textId"))
                 if not text_id:
-                    text_id = _generate_para_id()
+                    text_id = self._new_long_hex_id(used_hex_ids)
                     para.set(_qn(NS_W14, "textId"), text_id)
                     updated_comments = True
 
@@ -295,7 +424,7 @@ class CommentManager:
                 }
 
             if primary_para_id not in durable_ids:
-                durable_ids[primary_para_id] = _generate_durable_id()
+                durable_ids[primary_para_id] = self._new_long_hex_id(used_hex_ids)
                 ids_part.add_comment_id(
                     para_id=primary_para_id,
                     durable_id=durable_ids[primary_para_id],
@@ -318,6 +447,75 @@ class CommentManager:
         if updated_comments:
             self._save_comments()
 
+        # Repair leftovers: metadata keyed to paraIds that no longer match a
+        # comment paragraph, and reply links to parents that no longer exist.
+        valid_para_ids = self._collect_comment_para_ids()
+        self._cleanup_orphan_metadata(valid_para_ids)
+        self._detach_orphan_replies(valid_para_ids)
+
+    @staticmethod
+    def _para_id_reuse_corroborated(
+        comment_elem: etree._Element,
+        para_id: str,
+        durable_ids: dict[str, str],
+        extensible_info: dict[str, dict],
+    ) -> bool:
+        """Check that an unclaimed paraId's metadata belongs to this comment.
+
+        The entry's durable id must carry a dateUtc equal to the comment's
+        own w:date; cardinality alone (one missing paragraph, one unclaimed
+        entry) does not prove correspondence.
+        """
+        durable_id = durable_ids.get(para_id)
+        if not durable_id:
+            return False
+        date_utc = (extensible_info.get(durable_id) or {}).get("date_utc")
+        if not date_utc:
+            return False
+        timestamp = _parse_comment_date(comment_elem.get(_qn(NS_W, "date")))
+        return timestamp is not None and _format_utc(timestamp) == date_utc
+
+    @staticmethod
+    def _comment_text(comment_elem: etree._Element) -> str:
+        """Extract a comment's text, preserving breaks, tabs, and paragraphs."""
+
+        def has_ancestor(elem: etree._Element, tag: str, stop: etree._Element) -> bool:
+            parent = elem.getparent()
+            while parent is not None and parent is not stop:
+                if parent.tag == tag:
+                    return True
+                parent = parent.getparent()
+            return False
+
+        paragraphs: list[str] = []
+        for para in comment_elem.iter(_qn(NS_W, "p")):
+            # Paragraphs nested inside another paragraph (text boxes) are
+            # covered by the outer paragraph's run walk; visiting them here
+            # too would double-count their text.
+            if has_ancestor(para, _qn(NS_W, "p"), comment_elem):
+                continue
+            # Block-level mc:AlternateContent duplicates whole paragraphs in
+            # its Fallback branch; extract only the Choice copy.
+            if has_ancestor(para, _qn(NS_MC, "Fallback"), comment_elem):
+                continue
+            pieces: list[str] = []
+            for run in para.iter(_qn(NS_W, "r")):
+                # mc:AlternateContent carries the same content twice
+                # (mc:Choice and mc:Fallback); extract only the Choice copy.
+                if has_ancestor(run, _qn(NS_MC, "Fallback"), para):
+                    continue
+                for child in run:
+                    localname = etree.QName(child).localname
+                    if localname == "t":
+                        if child.text:
+                            pieces.append(child.text)
+                    elif localname in ("br", "cr"):
+                        pieces.append("\n")
+                    elif localname == "tab":
+                        pieces.append("\t")
+            paragraphs.append("".join(pieces))
+        return "\n".join(paragraphs)
+
     def list_comments(self) -> Iterator[CommentInfo]:
         """
         List all comments in the document.
@@ -334,12 +532,7 @@ class CommentManager:
             initials = comment_elem.get(_qn(NS_W, "initials"))
             date_str = comment_elem.get(_qn(NS_W, "date"))
 
-            # Get text content
-            text_parts = []
-            for t_elem in comment_elem.findall(f".//{_qn(NS_W, 't')}"):
-                if t_elem.text:
-                    text_parts.append(t_elem.text)
-            text = "".join(text_parts)
+            text = self._comment_text(comment_elem)
 
             # Collect paraIds from all comment paragraphs (some comments span multiple paragraphs)
             para_ids = []
@@ -370,6 +563,10 @@ class CommentManager:
         ids_part = CommentsIdsPart(self._document)
         durable_ids = ids_part.get_durable_ids()
 
+        known_para_ids: set[str] = set()
+        for info in comments_data:
+            known_para_ids.update(info["para_ids"])
+
         # Build CommentInfo objects
         for info in comments_data:
             para_ids = info["para_ids"]
@@ -387,6 +584,11 @@ class CommentManager:
                 para_id = para_ids[-1]
 
             thread_info = threading.get(para_id, {})
+            parent_para_id = thread_info.get("parent_para_id")
+            if parent_para_id and parent_para_id not in known_para_ids:
+                # Dangling link (parent removed by another tool): treat the
+                # comment as the thread root it effectively is.
+                parent_para_id = None
             yield CommentInfo(
                 comment_id=info["comment_id"],
                 para_id=para_id or "",
@@ -394,7 +596,7 @@ class CommentManager:
                 author=info["author"],
                 initials=info["initials"],
                 timestamp=info["timestamp"],
-                parent_para_id=thread_info.get("parent_para_id"),
+                parent_para_id=parent_para_id,
                 is_resolved=thread_info.get("done", False),
                 durable_id=durable_ids.get(para_id),
             )
@@ -411,24 +613,11 @@ class CommentManager:
         # Index comments by para_id for parent traversal
         by_para_id = {c.para_id: c for c in comments if c.para_id}
 
-        def thread_key(comment: CommentInfo) -> str:
-            return comment.para_id or comment.comment_id
-
-        def root_for(comment: CommentInfo) -> CommentInfo:
-            current = comment
-            seen: set[str] = set()
-            while current.parent_para_id and current.parent_para_id in by_para_id:
-                if current.parent_para_id in seen:
-                    break
-                seen.add(current.parent_para_id)
-                current = by_para_id[current.parent_para_id]
-            return current
-
         # Build threads by walking parent chains (supports reply-to-reply)
         threads_by_root: dict[str, CommentThread] = {}
         for comment in comments:
-            root = root_for(comment)
-            root_key = thread_key(root)
+            root = self._root_for(comment, by_para_id)
+            root_key = self._thread_key(root)
             thread = threads_by_root.get(root_key)
             if thread is None:
                 thread = CommentThread(root=root, replies=[])
@@ -630,18 +819,22 @@ class CommentManager:
         target_part = PeoplePart(self._document)
         return target_part.merge_from(source_part, include_presence)
 
-    def _ensure_person_for_comment(
+    def _resolve_person_spec(
         self,
         author: str,
         person: Optional[PersonSpec],
-    ) -> None:
+    ) -> Optional[tuple[str, Optional[dict[str, str]]]]:
+        """Validate a person spec without mutating the document.
+
+        Returns the (author, presence) pair to ensure in people.xml, or None
+        when no entry should be created. All validation errors are raised
+        here so callers can validate before touching the package.
+        """
         if person is None or person is False:
-            return
+            return None
 
         if isinstance(person, bool):
-            if person:
-                self.ensure_person(author)
-            return
+            return (author, None)
 
         presence: Optional[dict[str, str]] = None
         person_author = author
@@ -653,6 +846,8 @@ class CommentManager:
                     "provider_id": person.provider_id,
                     "user_id": person.user_id,
                 }
+            elif person.provider_id or person.user_id:
+                raise ValueError("presence must include provider_id and user_id")
         elif isinstance(person, str):
             person_author = person
         elif isinstance(person, dict):
@@ -677,7 +872,17 @@ class CommentManager:
         if person_author != author:
             raise ValueError("person author must match comment author to link identity")
 
-        self.ensure_person(person_author, presence)
+        if presence is not None:
+            # Validate presence contents now, not at apply time.
+            PeoplePart._normalize_presence(presence)
+
+        return (person_author, presence)
+
+    def _apply_person_spec(
+        self, plan: Optional[tuple[str, Optional[dict[str, str]]]]
+    ) -> None:
+        if plan is not None:
+            self.ensure_person(plan[0], plan[1])
 
     def add_comment(
         self,
@@ -693,30 +898,56 @@ class CommentManager:
         Add a new anchored comment to a paragraph.
 
         Args:
-            paragraph: The paragraph to comment on.
-            text: Comment text.
+            paragraph: The paragraph to comment on (must belong to this
+                manager's document).
+            text: Comment text. Newlines and tabs are preserved (encoded as
+                w:br / w:tab so Word renders them).
             author: PersonInfo instance.
             initials: Author initials (optional).
-            start_run: Index of first run to anchor (default: 0).
-            end_run: Index of last run to anchor (default: all runs).
+            start_run: Index of first run to anchor (default: 0). Python-style
+                negative indices are accepted; out-of-range indices raise.
+            end_run: Index of last run to anchor (default: last run).
             person: Optional people.xml entry to link author identity.
+                Accepts True (ensure an entry for the comment author), a str
+                author name or PersonInfo (must match the comment author), or
+                a dict with optional "author" and presence keys
+                ("provider_id"/"user_id" or a "presence" dict). None/False
+                leave people.xml untouched.
 
         Returns:
             The comment ID of the new comment.
+
+        Raises:
+            ValueError: If the paragraph belongs to another document, the
+                text contains characters not allowed in XML, end_run precedes
+                start_run, or the person spec is invalid.
+            IndexError: If start_run/end_run are out of range.
         """
+        # Validate everything before mutating anything.
         author_name, author_presence = self._parse_author_spec(author)
+        _validate_xml_text(text, "comment text")
+        _validate_xml_text(author_name, "author")
+        _validate_xml_text(initials, "initials")
+
+        anchor = CommentAnchor(self._document)
+        anchor.validate_anchor_target(paragraph, start_run, end_run)
+
         person_spec = person
         if person_spec is None and author_presence:
             person_spec = {"presence": author_presence}
         elif person_spec is True and author_presence:
             person_spec = {"presence": author_presence}
+        person_plan = self._resolve_person_spec(author_name, person_spec)
 
-        comment_id = _generate_id()
-        para_id = _generate_para_id()
-        text_id = _generate_para_id()
-        durable_id = _generate_durable_id()
+        self._ensure_parts()
 
-        self._ensure_person_for_comment(author_name, person_spec)
+        comment_id = self._new_comment_id()
+        used_hex_ids = self._used_long_hex_ids()
+        para_id = self._new_long_hex_id(used_hex_ids)
+        text_id = self._new_long_hex_id(used_hex_ids)
+        durable_id = self._new_long_hex_id(used_hex_ids)
+
+        self._apply_person_spec(person_plan)
 
         # 1. Add to comments.xml
         timestamp = self._add_comment_xml(
@@ -729,7 +960,6 @@ class CommentManager:
         )
 
         # 2. Add anchors to document.xml
-        anchor = CommentAnchor(self._document)
         anchor.add_anchors(
             paragraph=paragraph,
             comment_id=comment_id,
@@ -767,10 +997,11 @@ class CommentManager:
 
         Args:
             parent_id: Comment ID of the parent comment.
-            text: Reply text.
+            text: Reply text. Newlines and tabs are preserved.
             author: PersonInfo instance.
             initials: Author initials (optional).
-            person: Optional people.xml entry to link author identity.
+            person: Optional people.xml entry to link author identity (see
+                add_comment for the accepted forms).
 
         Returns:
             The comment ID of the reply.
@@ -778,11 +1009,32 @@ class CommentManager:
         Raises:
             ValueError: If parent comment not found.
         """
+        author_name, author_presence = self._parse_author_spec(author)
+        _validate_xml_text(text, "comment text")
+        _validate_xml_text(author_name, "author")
+        _validate_xml_text(initials, "initials")
+
+        person_spec = person
+        if person_spec is None and author_presence:
+            person_spec = {"presence": author_presence}
+        elif person_spec is True and author_presence:
+            person_spec = {"presence": author_presence}
+        person_plan = self._resolve_person_spec(author_name, person_spec)
+
+        # Validate the parent id before mutating anything (including the
+        # metadata migration below).
+        if not self._comment_id_exists(parent_id):
+            raise ValueError(f"Parent comment {parent_id} not found")
+
+        self._ensure_parts()
+
         # Find parent comment's para_id and resolve root for compatibility.
         comments = list(self.list_comments())
         parent_comment = next((c for c in comments if c.comment_id == parent_id), None)
 
         if parent_comment is None or not parent_comment.para_id:
+            # The parent exists but lacks metadata (e.g. created by another
+            # tool); backfill it and retry.
             self.migrate_comment_metadata()
             comments = list(self.list_comments())
             parent_comment = next((c for c in comments if c.comment_id == parent_id), None)
@@ -793,35 +1045,28 @@ class CommentManager:
         parent_parent_para_id = parent_comment.parent_para_id
 
         by_para_id = {c.para_id: c for c in comments if c.para_id}
-        root_comment = parent_comment
-        seen: set[str] = set()
-        while (
-            root_comment.parent_para_id
-            and root_comment.parent_para_id in by_para_id
-            and root_comment.parent_para_id not in seen
-        ):
-            seen.add(root_comment.parent_para_id)
-            root_comment = by_para_id[root_comment.parent_para_id]
+        root_comment = self._root_for(parent_comment, by_para_id)
 
         # Word UI doesn't support nested replies; attach to the root comment.
         effective_parent_para_id = root_comment.para_id or parent_para_id
         effective_parent_parent_para_id = root_comment.parent_para_id
 
         anchor = CommentAnchor(self._document)
+        anchor_parent_id = root_comment.comment_id or parent_id
 
-        author_name, author_presence = self._parse_author_spec(author)
-        person_spec = person
-        if person_spec is None and author_presence:
-            person_spec = {"presence": author_presence}
-        elif person_spec is True and author_presence:
-            person_spec = {"presence": author_presence}
+        # Validate the anchor location before writing the reply so a failure
+        # cannot leave an anchor-less comment behind.
+        _, parent_start, parent_end, _ = anchor._find_anchor_elements(anchor_parent_id)
+        if parent_start is None or parent_end is None:
+            raise ValueError(f"Could not find anchors for comment {anchor_parent_id}")
 
-        comment_id = _generate_id()
-        para_id = _generate_para_id()
-        text_id = _generate_para_id()
-        durable_id = _generate_durable_id()
+        comment_id = self._new_comment_id()
+        used_hex_ids = self._used_long_hex_ids()
+        para_id = self._new_long_hex_id(used_hex_ids)
+        text_id = self._new_long_hex_id(used_hex_ids)
+        durable_id = self._new_long_hex_id(used_hex_ids)
 
-        self._ensure_person_for_comment(author_name, person_spec)
+        self._apply_person_spec(person_plan)
 
         # 1. Add to comments.xml
         timestamp = self._add_comment_xml(
@@ -834,7 +1079,6 @@ class CommentManager:
         )
 
         # 2. Add anchors at the root comment location for Word threading compatibility.
-        anchor_parent_id = root_comment.comment_id or parent_id
         anchor.add_anchors_at_comment(
             parent_comment_id=anchor_parent_id,
             new_comment_id=comment_id,
@@ -876,10 +1120,13 @@ class CommentManager:
 
     def resolve_comment(self, comment_id: str) -> None:
         """
-        Mark a comment as resolved.
+        Mark a comment's thread as resolved.
+
+        Resolution is thread-scoped, matching Word: every comment in the
+        thread is marked done.
 
         Args:
-            comment_id: The comment ID to resolve.
+            comment_id: Any comment ID within the thread.
 
         Raises:
             ValueError: If comment not found.
@@ -888,10 +1135,10 @@ class CommentManager:
 
     def unresolve_comment(self, comment_id: str) -> None:
         """
-        Mark a comment as unresolved.
+        Mark a comment's thread as unresolved (thread-scoped, like Word).
 
         Args:
-            comment_id: The comment ID to unresolve.
+            comment_id: Any comment ID within the thread.
 
         Raises:
             ValueError: If comment not found.
@@ -900,51 +1147,55 @@ class CommentManager:
 
     def set_comment_resolved(self, comment_id: str, resolved: bool) -> None:
         """
-        Set the resolved status for a comment.
+        Set the resolved status for a comment's thread.
+
+        Word treats resolution as thread-scoped and marks every member done,
+        so this updates the whole thread. Missing metadata (e.g. comments
+        created by other tools) is backfilled first.
 
         Args:
-            comment_id: The comment ID to update.
+            comment_id: Any comment ID within the thread.
             resolved: True to resolve, False to unresolve.
 
         Raises:
             ValueError: If comment not found.
         """
-        para_id = None
-        for comment in self.list_comments():
-            if comment.comment_id == comment_id:
-                para_id = comment.para_id
-                break
-
-        if not para_id:
+        if not self._comment_id_exists(comment_id):
             raise ValueError(f"Comment {comment_id} not found")
 
+        self.migrate_comment_metadata()
+
+        thread_comments = self._thread_comments_for(comment_id)
         ext_part = CommentsExtendedPart(self._document)
-        ext_part.set_done(para_id, done=resolved)
+        threading = ext_part.get_threading_info()
+        for comment in thread_comments:
+            if comment.para_id and comment.para_id in threading:
+                ext_part.set_done(comment.para_id, done=resolved)
 
     def delete_comment(self, comment_id: str) -> None:
         """
         Delete a single comment.
 
-        Replies remain in the document but are detached from the deleted parent.
+        Replies remain in the document but are detached from the deleted
+        parent (their anchors stay at the original location).
 
         Args:
             comment_id: The comment ID to delete.
 
         Raises:
-            ValueError: If comment not found.
+            ValueError: If comment not found (checked before any mutation).
         """
-        self.migrate_comment_metadata()
-
-        if self._comments_handler is None:
-            self._comments_handler = CommentsPart(self._document)
-
-        removed_para_ids = self._comments_handler.remove_comment(comment_id)
-        if removed_para_ids is None:
+        if not self._comment_id_exists(comment_id):
             raise ValueError(f"Comment {comment_id} not found")
 
-        # Remove anchors for this comment.
+        self.migrate_comment_metadata()
+
+        # Remove anchors first so a failure cannot leave anchors referencing
+        # a comment that no longer exists.
         anchor = CommentAnchor(self._document)
         anchor.remove_anchors(comment_id)
+
+        removed_para_ids = self._comments_part().remove_comment(comment_id) or []
 
         # Remove comment metadata entries.
         deleted_para_ids = {pid for pid in removed_para_ids if pid}
@@ -962,28 +1213,36 @@ class CommentManager:
             comment_id: Any comment ID within the thread.
 
         Raises:
-            ValueError: If comment not found.
+            ValueError: If comment not found (checked before any mutation).
         """
+        if not self._comment_id_exists(comment_id):
+            raise ValueError(f"Comment {comment_id} not found")
+
         self.migrate_comment_metadata()
         thread_comments = self._thread_comments_for(comment_id)
 
-        if self._comments_handler is None:
-            self._comments_handler = CommentsPart(self._document)
-
+        handler = self._comments_part()
         anchor = CommentAnchor(self._document)
         deleted_para_ids: set[str] = set()
+        seen_ids: set[str] = set()
 
-        for comment in thread_comments:
-            removed_para_ids = self._comments_handler.remove_comment(comment.comment_id)
-            if removed_para_ids is None:
-                raise ValueError(f"Comment {comment.comment_id} not found")
-            deleted_para_ids.update(pid for pid in removed_para_ids if pid)
-            anchor.remove_anchors(comment.comment_id)
-
-        self._cleanup_comment_metadata(deleted_para_ids)
-        remaining_para_ids = self._collect_comment_para_ids()
-        self._cleanup_orphan_metadata(remaining_para_ids)
-        self._detach_orphan_replies(remaining_para_ids)
+        try:
+            for comment in thread_comments:
+                cid = comment.comment_id
+                if not cid or cid in seen_ids:
+                    continue
+                seen_ids.add(cid)
+                anchor.remove_anchors(cid)
+                removed_para_ids = handler.remove_comment(cid)
+                if removed_para_ids:
+                    deleted_para_ids.update(pid for pid in removed_para_ids if pid)
+        finally:
+            # Always purge metadata for whatever was removed, even if a
+            # malformed thread member interrupted the loop.
+            self._cleanup_comment_metadata(deleted_para_ids)
+            remaining_para_ids = self._collect_comment_para_ids()
+            self._cleanup_orphan_metadata(remaining_para_ids)
+            self._detach_orphan_replies(remaining_para_ids)
 
     def move_comment(
         self,
@@ -993,23 +1252,48 @@ class CommentManager:
         end_run: Optional[int] = None,
     ) -> None:
         """
-        Move a single comment anchor to a new paragraph.
+        Move a standalone comment's anchor to a new paragraph.
+
+        Word keeps a thread's anchors co-located, so comments that are part
+        of a thread with replies must be moved with move_thread() instead.
 
         Args:
             comment_id: The comment ID to move.
-            paragraph: Paragraph to anchor the comment to.
+            paragraph: Paragraph to anchor the comment to (must belong to
+                this manager's document).
             start_run: Index of first run to anchor.
             end_run: Index of last run to anchor (default: last run).
 
         Raises:
-            ValueError: If comment not found.
+            ValueError: If comment not found, the comment belongs to a thread
+                with replies, or the paragraph/run indices are invalid.
+            IndexError: If start_run/end_run are out of range.
         """
         _, by_id, _ = self._comment_index()
         if comment_id not in by_id:
             raise ValueError(f"Comment {comment_id} not found")
+
+        thread_comments = self._thread_comments_for(comment_id)
+        if len({c.comment_id for c in thread_comments if c.comment_id}) > 1:
+            raise ValueError(
+                f"Comment {comment_id} belongs to a thread with replies; "
+                "use move_thread() to keep the thread's anchors co-located"
+            )
+
         anchor = CommentAnchor(self._document)
+        # Resolve the target span before removing the old anchors: removal
+        # can delete reference runs and shift the run indices the caller
+        # computed. The whole-paragraph default is index-free, so it is
+        # re-resolved after removal instead (an in-place move would otherwise
+        # pin the comment's own reference run as an endpoint).
+        default_span = start_run == 0 and end_run is None
+        span = anchor.plan_anchor_span(paragraph, start_run, end_run)
+        if not default_span:
+            anchor.ensure_span_survives_removal(span, {comment_id})
         anchor.remove_anchors(comment_id)
-        anchor.add_anchors(paragraph, comment_id, start_run=start_run, end_run=end_run)
+        if default_span:
+            span = anchor.plan_anchor_span(paragraph, start_run, end_run)
+        anchor.add_anchors_at_span(paragraph, span, comment_id)
 
     def move_thread(
         self,
@@ -1023,12 +1307,15 @@ class CommentManager:
 
         Args:
             comment_id: Any comment ID within the thread.
-            paragraph: Paragraph to anchor the thread to.
+            paragraph: Paragraph to anchor the thread to (must belong to this
+                manager's document).
             start_run: Index of first run to anchor (root comment).
             end_run: Index of last run to anchor (root comment).
 
         Raises:
-            ValueError: If comment not found.
+            ValueError: If comment not found, or the paragraph/run indices
+                are invalid.
+            IndexError: If start_run/end_run are out of range.
         """
         thread_comments = self._thread_comments_for(comment_id)
         by_para_id = {c.para_id: c for c in thread_comments if c.para_id}
@@ -1039,25 +1326,44 @@ class CommentManager:
         if target is None:
             raise ValueError(f"Comment {comment_id} not found")
         root = self._root_for(target, by_para_id)
+        if not root.comment_id:
+            raise ValueError(
+                f"thread containing comment {comment_id} has a root without a "
+                "w:id; the thread cannot be moved"
+            )
 
         anchor = CommentAnchor(self._document)
-        for comment in thread_comments:
-            anchor.remove_anchors(comment.comment_id)
+        # Resolve the target span before removing the old anchors (removal
+        # can delete reference runs and shift run indices); the index-free
+        # whole-paragraph default is re-resolved after removal instead.
+        default_span = start_run == 0 and end_run is None
+        span = anchor.plan_anchor_span(paragraph, start_run, end_run)
+        thread_ids = {c.comment_id for c in thread_comments if c.comment_id}
+        if not default_span:
+            anchor.ensure_span_survives_removal(span, thread_ids)
 
-        anchor.add_anchors(
-            paragraph,
-            root.comment_id,
-            start_run=start_run,
-            end_run=end_run,
-        )
+        seen_ids: set[str] = set()
+        for comment in thread_comments:
+            cid = comment.comment_id
+            if not cid or cid in seen_ids:
+                continue
+            seen_ids.add(cid)
+            anchor.remove_anchors(cid)
+
+        if default_span:
+            span = anchor.plan_anchor_span(paragraph, start_run, end_run)
+        anchor.add_anchors_at_span(paragraph, span, root.comment_id)
 
         # Re-anchor replies at the root comment location.
+        re_anchored = {root.comment_id}
         for comment in thread_comments:
-            if comment.comment_id == root.comment_id:
+            cid = comment.comment_id
+            if not cid or cid in re_anchored:
                 continue
+            re_anchored.add(cid)
             anchor.add_anchors_at_comment(
                 parent_comment_id=root.comment_id,
-                new_comment_id=comment.comment_id,
+                new_comment_id=cid,
             )
 
     def _cleanup_comment_metadata(self, para_ids: set[str]) -> None:
@@ -1076,6 +1382,43 @@ class CommentManager:
             if durable_id:
                 extensible_part.remove_comment_extensible(durable_id)
 
+    @staticmethod
+    def _append_text_content(
+        para: etree._Element, text: str, rsid_rpr: str
+    ) -> None:
+        """Append the comment text as runs, preserving whitespace fidelity.
+
+        Newlines become w:br and tabs w:tab (literal \\n/\\t inside w:t are
+        collapsed by Word); chunks with leading/trailing whitespace get
+        xml:space="preserve" so Word does not trim them.
+        """
+        run = etree.SubElement(para, _qn(NS_W, "r"))
+        run.set(_qn(NS_W, "rsidRPr"), rsid_rpr)
+
+        def append_chunk(chunk: str) -> None:
+            t = etree.SubElement(run, _qn(NS_W, "t"))
+            t.text = chunk
+            if chunk.strip() != chunk:
+                t.set(_qn(NS_XML, "space"), "preserve")
+
+        normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+        buffer: list[str] = []
+        emitted = False
+        for char in normalized:
+            if char in ("\n", "\t"):
+                if buffer:
+                    append_chunk("".join(buffer))
+                    buffer.clear()
+                etree.SubElement(run, _qn(NS_W, "br" if char == "\n" else "tab"))
+                emitted = True
+            else:
+                buffer.append(char)
+        if buffer:
+            append_chunk("".join(buffer))
+            emitted = True
+        if not emitted:
+            etree.SubElement(run, _qn(NS_W, "t"))
+
     def _add_comment_xml(
         self,
         comment_id: str,
@@ -1091,8 +1434,9 @@ class CommentManager:
         rsid_default = uuid.uuid4().hex[:8].upper()
         rsid_rpr = uuid.uuid4().hex[:8].upper()
 
-        # Build comment element
-        comment = etree.SubElement(self._comments_xml, _qn(NS_W, "comment"))
+        # Build the comment detached so a failure partway through cannot
+        # leave a half-built comment in the saved document.
+        comment = etree.Element(_qn(NS_W, "comment"))
         comment.set(_qn(NS_W, "id"), comment_id)
         comment.set(_qn(NS_W, "author"), author)
         if initials:
@@ -1124,12 +1468,10 @@ class CommentManager:
         rStyle.set(_qn(NS_W, "val"), "CommentReference")
         etree.SubElement(run1, _qn(NS_W, "annotationRef"))
 
-        # Add run with text
-        run2 = etree.SubElement(para, _qn(NS_W, "r"))
-        run2.set(_qn(NS_W, "rsidRPr"), rsid_rpr)
-        t = etree.SubElement(run2, _qn(NS_W, "t"))
-        t.text = text
+        # Add the comment text
+        self._append_text_content(para, text, rsid_rpr)
 
-        # Save changes to the part
+        # Attach and save
+        self._comments_xml.append(comment)
         self._save_comments()
         return timestamp
