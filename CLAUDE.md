@@ -17,15 +17,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv venv && uv pip install -e ".[dev]"
 
 # Run tests
-pytest                          # Full suite
-pytest tests/test_basic.py -v   # Single file with verbose
-pytest -k "test_add_comment"    # Single test by name
+pytest                                  # Full suite
+pytest tests/test_manager_basic.py -v   # Single file with verbose
+pytest -k "test_add_comment"            # Single test by name
 
 # Type checking
 mypy src/docx_comments
 
 # Linting
-ruff check src/
+ruff check src/ tests/
 ruff format src/
 ```
 
@@ -33,12 +33,18 @@ ruff format src/
 
 ### OOXML Comment System
 
-Word comments require coordination across four XML parts:
+Word comments require coordination across six XML parts:
 
 1. **comments.xml** - Comment content (text, author, timestamp)
-2. **document.xml** - Anchors linking comments to text ranges
+2. **document.xml** - Anchors linking comments to text ranges (also headers,
+   footers, tables, footnotes/endnotes)
 3. **commentsExtended.xml** - Threading (parent-child relationships, done status)
 4. **commentsIds.xml** - Durable IDs for persistence across edits
+5. **commentsExtensible.xml** - Modern comment metadata (w16cex:dateUtc)
+6. **people.xml** - Optional author identity linkage (w15:person)
+
+Parts are created lazily on the first mutating operation; read-only use of
+`CommentManager` leaves the document untouched.
 
 ### Module Structure
 
@@ -61,10 +67,14 @@ Word comments require coordination across four XML parts:
 
 ### Key Implementation Details
 
-**ID Generation** (`manager.py:37-49`):
-- `comment_id`: Large random integer (10 digits)
-- `para_id`: 8 uppercase hex chars (links comments.xml to extended parts)
-- `durable_id`: 8 uppercase hex chars (persistence across edits)
+**ID Generation** (`manager.py`):
+- `comment_id`: random positive 32-bit integer (ST_DecimalNumber is treated
+  as Int32 by Word/Open XML SDK/python-docx — never exceed 0x7FFFFFFE)
+- `para_id` / `text_id` / `durable_id`: 8 uppercase hex chars
+  (ST_LongHexNumber, capped at 0x7FFFFFFE)
+- All ids are drawn from a module-private RNG (immune to consumer
+  `random.seed()`) and re-drawn until unique against the ids already present
+  in the document
 
 **Namespace Prefixes**:
 - `w:` - Main WordprocessingML (2006)
@@ -72,18 +82,33 @@ Word comments require coordination across four XML parts:
 - `w15:` - Word 2012 extensions (threading, done status)
 - `w16cid:` - Word 2016 extensions (durable IDs)
 
-**Part Creation** (`xml_parts.py`): Uses python-docx internals (`docx.opc.part.Part`, `docx.opc.packuri.PackURI`) to create new parts with correct content types and relationships.
+**Part Creation** (`xml_parts.py`): comments.xml is created through
+python-docx's native `CommentsPart.default()` when available (python-docx
+>= 1.2.0), so python-docx's own comments API keeps working; the satellite
+parts use python-docx internals (`docx.opc.part.Part`, `docx.opc.packuri.PackURI`)
+with correct content types and relationships.
 
-**XmlPart Serialisation**: python-docx loads comments.xml as an `XmlPart` subclass which uses `_element` for serialisation, not `_blob`. The `CommentsPart` handler detects this and works with `_element` directly for existing documents, falling back to blob-based caching for newly created parts.
+**XmlPart vs blob serialisation** (`xml_parts.py`): python-docx loads some
+parts as `XmlPart` subclasses (serialised from their live `_element`) and
+others as generic blob `Part`s (serialised from `_blob`). The shared
+`_BasePartHandler` prefers a part's live element and, for blob parts, caches
+one parsed tree on the part object itself (so concurrent handler instances
+share it) and re-serialises the blob on `_save()`. `anchors.py` uses the same
+helpers (`part_element` / `sync_part_blob`) for footnotes/endnotes parts.
 
 ## Testing Notes
 
-Tests use `tmp_path` fixture for save/reload verification. The test file `tests/test_basic.py` covers:
-- Manager initialisation with new documents
-- Comment add/reply/resolve operations
-- Thread grouping logic
-- Model property correctness
-- Word Online compatibility (XML structure validation via zipfile inspection)
+Tests use `tmp_path` fixture for save/reload verification. Coverage by file:
+- `tests/test_manager_basic.py` — manager init, add/resolve, thread grouping
+- `tests/test_threads.py` — replies (incl. reply-to-reply, tables, headers)
+- `tests/test_editing.py` — delete/move/unresolve lifecycle
+- `tests/test_migration.py` — metadata backfill
+- `tests/test_xml.py` — Word Online compatibility (XML structure via zipfile)
+- `tests/test_models.py`, `tests/test_people.py` — models and people.xml
+- `tests/test_robustness.py` — regression tests from the 2026-08 adversarial
+  review (id ranges/uniqueness, text fidelity, strict index validation,
+  footnote anchors, interop with python-docx native comments, orphan
+  handling, security hardening)
 
 ## References
 
