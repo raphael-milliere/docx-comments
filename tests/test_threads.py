@@ -91,7 +91,7 @@ class TestCommentThreads:
         """Test replies across multiple threads and locations with roundtrip."""
         doc = Document()
         para1 = doc.add_paragraph("Body para 1")
-        para2 = doc.add_paragraph("Body para 2")
+        doc.add_paragraph("Body para 2")
         table = doc.add_table(rows=1, cols=1)
         table_para = table.rows[0].cells[0].paragraphs[0]
         table_para.add_run("Table text")
@@ -105,7 +105,7 @@ class TestCommentThreads:
         root_header = mgr.add_comment(header_para, "Root header", author_obj("Author3"))
 
         reply_body_1 = mgr.reply_to_comment(root_body, "Body reply 1", author_obj("Author4"))
-        reply_body_2 = mgr.reply_to_comment(reply_body_1, "Body reply 2", author_obj("Author5"))
+        mgr.reply_to_comment(reply_body_1, "Body reply 2", author_obj("Author5"))
         mgr.reply_to_comment(root_table, "Table reply 1", author_obj("Author6"))
         mgr.reply_to_comment(root_header, "Header reply 1", author_obj("Author7"))
 

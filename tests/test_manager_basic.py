@@ -1,8 +1,7 @@
 """Basic CommentManager behavior tests."""
 
-from docx import Document
-
 import pytest
+from docx import Document
 
 from docx_comments import CommentManager, PersonInfo
 
@@ -114,7 +113,7 @@ class TestCommentManagerBasic:
 
         # Add two independent comments
         id1 = mgr.add_comment(para1, "Comment 1", author_obj("Author1"))
-        id2 = mgr.add_comment(para2, "Comment 2", author_obj("Author2"))
+        mgr.add_comment(para2, "Comment 2", author_obj("Author2"))
 
         # Add replies to first comment
         mgr.reply_to_comment(id1, "Reply 1a", author_obj("Author3"))
