@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -33,11 +33,9 @@ jobs:
       - name: Run linting
         run: |
           source .venv/bin/activate
-          ruff check src/
+          ruff check src/ tests/
 
       - name: Run type checking
-        # python-docx lacks proper type stubs; mypy errors are expected
-        continue-on-error: true
         run: |
           source .venv/bin/activate
           mypy src/docx_comments
@@ -45,7 +43,7 @@ jobs:
       - name: Run tests
         run: |
           source .venv/bin/activate
-          pytest --cov=docx_comments --cov-report=xml
+          pytest --cov=docx_comments --cov-report=xml --cov-fail-under=80
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -54,9 +52,34 @@ jobs:
           files: ./coverage.xml
           fail_ci_if_error: false
 
+  # Exercise the declared dependency floor (python-docx>=1.0.0) so a commit
+  # cannot silently start requiring a newer python-docx API.
+  test-dependency-floor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.9
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.9"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies at the floor
+        run: |
+          uv venv
+          uv pip install -e ".[dev]" "python-docx==1.0.0" "lxml==4.9.4"
+
+      - name: Run tests
+        run: |
+          source .venv/bin/activate
+          pytest
+
   ci-passed:
     name: CI Passed
-    needs: [test]
+    needs: [test, test-dependency-floor]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -64,6 +87,10 @@ jobs:
         run: |
           if [ "${{ needs.test.result }}" != "success" ]; then
             echo "Test job failed"
+            exit 1
+          fi
+          if [ "${{ needs.test-dependency-floor.result }}" != "success" ]; then
+            echo "Dependency-floor job failed"
             exit 1
           fi
           echo "All checks passed!"

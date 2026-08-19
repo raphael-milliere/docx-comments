@@ -1,13 +1,15 @@
-"""Handler for comment anchors in document.xml."""
+"""Handler for comment anchors in document.xml and related story parts."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, Optional, Tuple
 
 from lxml import etree
 
+from docx_comments.xml_parts import part_element, sync_part_blob
+
 if TYPE_CHECKING:
-    from docx import Document
+    from docx.document import Document
     from docx.text.paragraph import Paragraph
 
 
@@ -15,10 +17,36 @@ if TYPE_CHECKING:
 NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
+REL_FOOTNOTES = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes"
+REL_ENDNOTES = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes"
+
 
 def _qn(ns: str, name: str) -> str:
     """Create qualified name with namespace."""
     return f"{{{ns}}}{name}"
+
+
+_START_TAG = _qn(NS_W, "commentRangeStart")
+_END_TAG = _qn(NS_W, "commentRangeEnd")
+_REF_TAG = _qn(NS_W, "commentReference")
+_ID_ATTR = _qn(NS_W, "id")
+
+# Direct children of w:p that wrap runs of visible content (EG_PContent
+# members other than properties, bookmarks, proof errors, and anchors).
+_RUN_CONTAINER_TAGS = frozenset(
+    {
+        "hyperlink",
+        "ins",
+        "del",
+        "moveFrom",
+        "moveTo",
+        "smartTag",
+        "sdt",
+        "fldSimple",
+        "dir",
+        "bdo",
+    }
+)
 
 
 class CommentAnchor:
@@ -27,47 +55,24 @@ class CommentAnchor:
     def __init__(self, document: Document) -> None:
         self._document = document
 
-    def _part_element(self, part) -> Optional[etree._Element]:
-        """Get an XML element for a part, ensuring it is writable when possible."""
-        if part is None:
-            return None
-
-        if hasattr(part, "element"):
-            try:
-                elem = part.element
-                if elem is not None:
-                    return elem
-            except (AttributeError, TypeError, ValueError, etree.XMLSyntaxError):
-                pass
-
-        if hasattr(part, "_element"):
-            if getattr(part, "_element", None) is None:
-                try:
-                    part._element = etree.fromstring(part.blob)
-                except (AttributeError, TypeError, etree.XMLSyntaxError):
-                    return None
-            return part._element
-
-        return None
-
-    def _iter_anchor_roots(self) -> Iterator[etree._Element]:
-        """Yield XML roots that can contain comment anchors."""
+    def _iter_anchor_parts(self) -> Iterator[Tuple[object, etree._Element]]:
+        """Yield (part, XML root) pairs that can contain comment anchors."""
         seen: set[int] = set()
 
-        def add_root(elem: Optional[etree._Element]) -> None:
+        def add_root(part: object, elem: Optional[etree._Element]) -> None:
             if elem is None:
                 return
             elem_id = id(elem)
             if elem_id in seen:
                 return
             seen.add(elem_id)
-            roots.append(elem)
+            entries.append((part, elem))
 
-        roots: list[etree._Element] = []
-        add_root(self._document.element)
+        entries: list[Tuple[object, etree._Element]] = []
+        doc_part = getattr(self._document, "part", None)
+        add_root(doc_part, self._document.element)
 
         # Headers/footers across sections, without forcing part creation.
-        doc_part = getattr(self._document, "part", None)
         related_parts = getattr(doc_part, "related_parts", {}) if doc_part else {}
         for section in getattr(self._document, "sections", []):
             sect_pr = getattr(section, "_sectPr", None)
@@ -79,39 +84,55 @@ class CommentAnchor:
                     if not r_id:
                         continue
                     part = related_parts.get(r_id)
-                    add_root(self._part_element(part))
+                    add_root(part, part_element(part))
 
-        # Footnotes/endnotes parts (if available).
+        # Footnotes/endnotes parts, resolved through document relationships
+        # (python-docx exposes no attribute for them and loads them as
+        # generic blob Parts). External-target relationships have no part.
         if doc_part is not None:
-            for attr in ("footnotes_part", "endnotes_part"):
-                part = getattr(doc_part, attr, None)
-                add_root(self._part_element(part))
+            for rel in doc_part.rels.values():
+                if rel.reltype in (REL_FOOTNOTES, REL_ENDNOTES) and not getattr(
+                    rel, "is_external", False
+                ):
+                    part = rel.target_part
+                    add_root(part, part_element(part))
 
-        for root in roots:
+        for part, root in entries:
+            yield part, root
+
+    def _iter_anchor_roots(self) -> Iterator[etree._Element]:
+        """Yield XML roots that can contain comment anchors."""
+        for _, root in self._iter_anchor_parts():
             yield root
 
     def _find_anchor_elements(
         self, comment_id: str
-    ) -> tuple[Optional[etree._Element], Optional[etree._Element], Optional[etree._Element]]:
-        start_xpath = (
-            f".//{_qn(NS_W, 'commentRangeStart')}[@{_qn(NS_W, 'id')}='{comment_id}']"
-        )
-        end_xpath = (
-            f".//{_qn(NS_W, 'commentRangeEnd')}[@{_qn(NS_W, 'id')}='{comment_id}']"
-        )
-        ref_xpath = (
-            f".//{_qn(NS_W, 'commentReference')}[@{_qn(NS_W, 'id')}='{comment_id}']"
-        )
+    ) -> tuple[
+        Optional[object],
+        Optional[etree._Element],
+        Optional[etree._Element],
+        Optional[etree._Element],
+    ]:
+        """Find (part, rangeStart, rangeEnd, reference) for a comment.
 
-        for root in self._iter_anchor_roots():
-            start = root.find(start_xpath)
-            end = root.find(end_xpath)
-            if start is None or end is None:
-                continue
-            ref = root.find(ref_xpath)
-            return start, end, ref
+        Matching is done in Python (not via path predicates) so ids read from
+        arbitrary documents cannot alter or break the query.
+        """
+        for part, root in self._iter_anchor_parts():
+            start = end = ref = None
+            for elem in root.iter(_START_TAG, _END_TAG, _REF_TAG):
+                if elem.get(_ID_ATTR) != comment_id:
+                    continue
+                if elem.tag == _START_TAG and start is None:
+                    start = elem
+                elif elem.tag == _END_TAG and end is None:
+                    end = elem
+                elif elem.tag == _REF_TAG and ref is None:
+                    ref = elem
+            if start is not None and end is not None:
+                return part, start, end, ref
 
-        return None, None, None
+        return None, None, None, None
 
     def _iter_paragraphs(self) -> Iterator[Paragraph]:
         for para in self._document.paragraphs:
@@ -147,6 +168,196 @@ class CommentAnchor:
                 return True
         return False
 
+    def _validate_owned(self, paragraph: Paragraph) -> None:
+        """Reject paragraphs that don't live in this document's XML trees."""
+        part = getattr(paragraph, "part", None)
+        package = getattr(part, "package", None)
+        own_package = getattr(getattr(self._document, "part", None), "package", None)
+        if package is not None and own_package is not None and package is not own_package:
+            raise ValueError("paragraph does not belong to this manager's document")
+
+        # The element must live in one of this document's anchor-bearing
+        # trees; a paragraph from a detached/stale tree would be mutated
+        # without ever being saved.
+        root = paragraph._element.getroottree().getroot()
+        for _, part_root in self._iter_anchor_parts():
+            if part_root is root:
+                return
+        raise ValueError(
+            "paragraph belongs to a detached XML tree; re-fetch it from the document"
+        )
+
+    def _resolve_anchor_span(
+        self,
+        para_elem: etree._Element,
+        start_run: int,
+        end_run: Optional[int],
+    ) -> tuple[Optional[etree._Element], Optional[etree._Element]]:
+        """Resolve the (first, last) elements the anchor range should span.
+
+        Returns (None, None) for a paragraph with no anchorable content.
+        Raises IndexError/ValueError for run indices that do not address the
+        paragraph's direct runs (Python-style negative indices are accepted).
+        """
+        runs = para_elem.findall(_qn(NS_W, "r"))
+
+        if runs:
+            n = len(runs)
+            requested_start, requested_end = start_run, end_run
+            if end_run is None:
+                end_run = n - 1
+            if -n <= start_run < 0:
+                start_run += n
+            if -n <= end_run < 0:
+                end_run += n
+            if not 0 <= start_run < n:
+                raise IndexError(
+                    f"start_run {requested_start} out of range for paragraph with {n} run(s)"
+                )
+            if not 0 <= end_run < n:
+                raise IndexError(
+                    f"end_run {requested_end} out of range for paragraph with {n} run(s)"
+                )
+            if end_run < start_run:
+                raise ValueError(
+                    f"end_run {requested_end} precedes start_run {requested_start}"
+                )
+            return runs[start_run], runs[end_run]
+
+        # No direct runs: indices cannot address anything, so only the
+        # default whole-paragraph span is valid.
+        if start_run != 0 or end_run is not None:
+            raise IndexError(
+                "paragraph has no direct runs; omit start_run/end_run to "
+                "anchor the whole paragraph"
+            )
+
+        containers = [
+            child
+            for child in para_elem
+            if etree.QName(child).localname in _RUN_CONTAINER_TAGS
+        ]
+        if containers:
+            # Content lives inside hyperlink/tracked-change/etc. wrappers.
+            return containers[0], containers[-1]
+
+        return None, None
+
+    def validate_anchor_target(
+        self,
+        paragraph: Paragraph,
+        start_run: int = 0,
+        end_run: Optional[int] = None,
+    ) -> None:
+        """
+        Validate a prospective anchor target without mutating anything.
+
+        Raises:
+            ValueError: If the paragraph belongs to a different document.
+            IndexError: If start_run/end_run do not address the paragraph's runs.
+            ValueError: If end_run precedes start_run.
+        """
+        self.plan_anchor_span(paragraph, start_run, end_run)
+
+    def plan_anchor_span(
+        self,
+        paragraph: Paragraph,
+        start_run: int = 0,
+        end_run: Optional[int] = None,
+    ) -> tuple[Optional[etree._Element], Optional[etree._Element]]:
+        """Validate and resolve the (first, last) elements an anchor spans.
+
+        Resolving the span before other mutations (e.g. removing a comment's
+        old anchors, which can delete reference runs and shift run indices)
+        pins the range the caller actually addressed.
+        """
+        self._validate_owned(paragraph)
+        return self._resolve_anchor_span(paragraph._element, start_run, end_run)
+
+    def _sync_containing_part(self, elem: etree._Element) -> None:
+        """Persist the blob-backed part (if any) that owns this element."""
+        root = elem.getroottree().getroot()
+        for part, part_root in self._iter_anchor_parts():
+            if part_root is root:
+                sync_part_blob(part)
+                return
+
+    @staticmethod
+    def ensure_span_survives_removal(
+        span: tuple[Optional[etree._Element], Optional[etree._Element]],
+        comment_ids: set[str],
+    ) -> None:
+        """Raise before any mutation when a span endpoint would be deleted.
+
+        remove_anchors() deletes a reference run only when nothing but run
+        properties and matching references would remain — the same condition
+        is mirrored here so runs that also carry text are not rejected.
+        """
+        for endpoint in span:
+            if endpoint is None or etree.QName(endpoint).localname != "r":
+                continue
+            matching = [
+                child
+                for child in endpoint
+                if child.tag == _REF_TAG and child.get(_ID_ATTR) in comment_ids
+            ]
+            if matching and all(
+                child in matching or etree.QName(child).localname == "rPr"
+                for child in endpoint
+            ):
+                raise ValueError(
+                    "start_run/end_run address a comment reference run "
+                    "that this operation removes; recompute the indices"
+                )
+
+    def add_anchors_at_span(
+        self,
+        paragraph: Paragraph,
+        span: tuple[Optional[etree._Element], Optional[etree._Element]],
+        comment_id: str,
+    ) -> None:
+        """Insert anchors around a span previously resolved by plan_anchor_span.
+
+        Raises:
+            ValueError: If a span endpoint no longer exists in the paragraph
+                (e.g. the indices addressed a comment reference run that a
+                preceding remove_anchors() deleted).
+        """
+        first, last = span
+        para_elem = paragraph._element
+
+        if first is None or last is None:
+            # No anchorable content: anchor at paragraph level.
+            self._add_anchors_to_empty_paragraph(para_elem, comment_id)
+            self._sync_containing_part(para_elem)
+            return
+
+        if first.getparent() is None or last.getparent() is None:
+            raise ValueError(
+                "anchor target runs no longer exist (start_run/end_run "
+                "addressed a comment reference run removed by this "
+                "operation); recompute the indices"
+            )
+
+        # Insert commentRangeStart before the first spanned element
+        range_start = etree.Element(_START_TAG)
+        range_start.set(_ID_ATTR, comment_id)
+        first.addprevious(range_start)
+
+        # Insert commentRangeEnd after the last spanned element
+        range_end = etree.Element(_END_TAG)
+        range_end.set(_ID_ATTR, comment_id)
+        last.addnext(range_end)
+
+        # Insert commentReference run after commentRangeEnd
+        ref_run = etree.Element(_qn(NS_W, "r"))
+        ref = etree.SubElement(ref_run, _REF_TAG)
+        ref.set(_ID_ATTR, comment_id)
+        range_end.addnext(ref_run)
+
+        # Persist for blob-backed parts (footnotes/endnotes).
+        self._sync_containing_part(para_elem)
+
     def add_anchors(
         self,
         paragraph: Paragraph,
@@ -158,45 +369,23 @@ class CommentAnchor:
         Add comment anchors to a paragraph.
 
         Creates commentRangeStart, commentRangeEnd, and commentReference
-        elements around the specified runs.
+        elements around the specified runs. Runs are the paragraph's direct
+        w:r children; Python-style negative indices are accepted, and invalid
+        indices raise (IndexError/ValueError) rather than being adjusted.
 
         Args:
             paragraph: The paragraph to anchor the comment to.
             comment_id: The comment ID.
             start_run: Index of first run to anchor (default: 0).
-            end_run: Index of last run to anchor (default: all runs).
+            end_run: Index of last run to anchor (default: last run).
+
+        Raises:
+            ValueError: If the paragraph belongs to a different document, or
+                end_run precedes start_run.
+            IndexError: If start_run/end_run are out of range.
         """
-        para_elem = paragraph._element
-        runs = para_elem.findall(_qn(NS_W, "r"))
-
-        if not runs:
-            # If no runs, anchor at paragraph level
-            self._add_anchors_to_empty_paragraph(para_elem, comment_id)
-            return
-
-        # Validate run indices
-        if end_run is None:
-            end_run = len(runs) - 1
-        if start_run < 0 or start_run >= len(runs):
-            start_run = 0
-        if end_run < start_run or end_run >= len(runs):
-            end_run = len(runs) - 1
-
-        # Insert commentRangeStart before start_run
-        range_start = etree.Element(_qn(NS_W, "commentRangeStart"))
-        range_start.set(_qn(NS_W, "id"), comment_id)
-        runs[start_run].addprevious(range_start)
-
-        # Insert commentRangeEnd after end_run
-        range_end = etree.Element(_qn(NS_W, "commentRangeEnd"))
-        range_end.set(_qn(NS_W, "id"), comment_id)
-        runs[end_run].addnext(range_end)
-
-        # Insert commentReference run after commentRangeEnd
-        ref_run = etree.Element(_qn(NS_W, "r"))
-        ref = etree.SubElement(ref_run, _qn(NS_W, "commentReference"))
-        ref.set(_qn(NS_W, "id"), comment_id)
-        range_end.addnext(ref_run)
+        span = self.plan_anchor_span(paragraph, start_run, end_run)
+        self.add_anchors_at_span(paragraph, span, comment_id)
 
     def _add_anchors_to_empty_paragraph(
         self,
@@ -205,17 +394,17 @@ class CommentAnchor:
     ) -> None:
         """Add anchors to a paragraph with no runs."""
         # Create commentRangeStart
-        range_start = etree.Element(_qn(NS_W, "commentRangeStart"))
-        range_start.set(_qn(NS_W, "id"), comment_id)
+        range_start = etree.Element(_START_TAG)
+        range_start.set(_ID_ATTR, comment_id)
 
         # Create commentRangeEnd
-        range_end = etree.Element(_qn(NS_W, "commentRangeEnd"))
-        range_end.set(_qn(NS_W, "id"), comment_id)
+        range_end = etree.Element(_END_TAG)
+        range_end.set(_ID_ATTR, comment_id)
 
         # Create commentReference run
         ref_run = etree.Element(_qn(NS_W, "r"))
-        ref = etree.SubElement(ref_run, _qn(NS_W, "commentReference"))
-        ref.set(_qn(NS_W, "id"), comment_id)
+        ref = etree.SubElement(ref_run, _REF_TAG)
+        ref.set(_ID_ATTR, comment_id)
 
         # Insert after pPr if present, else at start
         pPr = para_elem.find(_qn(NS_W, "pPr"))
@@ -242,7 +431,7 @@ class CommentAnchor:
             new_comment_id: ID of the new comment.
         """
         # Find the parent comment's anchors
-        parent_start, parent_end, parent_ref = self._find_anchor_elements(parent_comment_id)
+        part, parent_start, parent_end, _ = self._find_anchor_elements(parent_comment_id)
 
         if parent_start is None or parent_end is None:
             raise ValueError(f"Could not find anchors for comment {parent_comment_id}")
@@ -251,7 +440,7 @@ class CommentAnchor:
         def is_comment_ref_run(elem: etree._Element) -> bool:
             if etree.QName(elem).localname != "r":
                 return False
-            return elem.find(_qn(NS_W, "commentReference")) is not None
+            return elem.find(_REF_TAG) is not None
 
         # Insert new start after the last commentRangeStart in the group.
         insert_start_after = parent_start
@@ -260,8 +449,8 @@ class CommentAnchor:
             insert_start_after = sibling
             sibling = sibling.getnext()
 
-        new_start = etree.Element(_qn(NS_W, "commentRangeStart"))
-        new_start.set(_qn(NS_W, "id"), new_comment_id)
+        new_start = etree.Element(_START_TAG)
+        new_start.set(_ID_ATTR, new_comment_id)
         insert_start_after.addnext(new_start)
 
         # Insert new end after the last commentRangeEnd in the group.
@@ -271,20 +460,23 @@ class CommentAnchor:
             insert_end_after = sibling
             sibling = sibling.getnext()
 
-        new_end = etree.Element(_qn(NS_W, "commentRangeEnd"))
-        new_end.set(_qn(NS_W, "id"), new_comment_id)
+        new_end = etree.Element(_END_TAG)
+        new_end.set(_ID_ATTR, new_comment_id)
         insert_end_after.addnext(new_end)
 
         # Add reference run after existing commentReference runs (if any).
         ref_run = etree.Element(_qn(NS_W, "r"))
-        ref = etree.SubElement(ref_run, _qn(NS_W, "commentReference"))
-        ref.set(_qn(NS_W, "id"), new_comment_id)
+        ref = etree.SubElement(ref_run, _REF_TAG)
+        ref.set(_ID_ATTR, new_comment_id)
         insert_ref_after = new_end
         sibling = new_end.getnext()
         while sibling is not None and is_comment_ref_run(sibling):
             insert_ref_after = sibling
             sibling = sibling.getnext()
         insert_ref_after.addnext(ref_run)
+
+        # Persist for blob-backed parts (footnotes/endnotes).
+        sync_part_blob(part)
 
     def find_paragraph_with_comment(self, comment_id: str) -> Optional[Paragraph]:
         """
@@ -294,10 +486,13 @@ class CommentAnchor:
             comment_id: The comment ID to find.
 
         Returns:
-            The Paragraph object, or None if not found.
+            The Paragraph object, or None if not found. Paragraphs in
+            footnotes/endnotes are returned as element-wrapping proxies whose
+            .part is the main document part; treat them as read-mostly (edits
+            made through such a proxy are not synced to the footnotes part).
         """
         # Find commentRangeStart for this comment
-        range_start, _, _ = self._find_anchor_elements(comment_id)
+        _, range_start, _, _ = self._find_anchor_elements(comment_id)
 
         if range_start is None:
             return None
@@ -310,7 +505,12 @@ class CommentAnchor:
                 for para in self._iter_paragraphs():
                     if para._element is parent:
                         return para
-                break
+                # Paragraphs inside tables, text boxes, footnotes, etc. are
+                # not reachable through document.paragraphs; wrap the element
+                # directly instead of reporting the comment as unanchored.
+                from docx.text.paragraph import Paragraph as _Paragraph
+
+                return _Paragraph(parent, self._document)
             parent = parent.getparent()
 
         return None
@@ -322,22 +522,34 @@ class CommentAnchor:
         Args:
             comment_id: The comment ID whose anchors to remove.
         """
-        # Find and remove all anchor elements
-        for root in self._iter_anchor_roots():
-            for tag in ["commentRangeStart", "commentRangeEnd"]:
-                for elem in root.findall(
-                    f".//{_qn(NS_W, tag)}[@{_qn(NS_W, 'id')}='{comment_id}']"
-                ):
-                    elem.getparent().remove(elem)
+        for part, root in self._iter_anchor_parts():
+            mutated = False
 
-            # Find and remove commentReference (and its parent run)
-            for ref in root.findall(
-                f".//{_qn(NS_W, 'commentReference')}[@{_qn(NS_W, 'id')}='{comment_id}']"
-            ):
+            for tag in (_START_TAG, _END_TAG):
+                for elem in list(root.iter(tag)):
+                    if elem.get(_ID_ATTR) != comment_id:
+                        continue
+                    elem.getparent().remove(elem)
+                    mutated = True
+
+            # Find and remove commentReference (and its parent run when only
+            # run properties would remain, e.g. Word's rPr/rStyle wrapper).
+            for ref in list(root.iter(_REF_TAG)):
+                if ref.get(_ID_ATTR) != comment_id:
+                    continue
                 ref_run = ref.getparent()
-                if ref_run is not None and etree.QName(ref_run).localname == "r":
-                    # Check if run only contains the reference
-                    if len(ref_run) == 1:
-                        ref_run.getparent().remove(ref_run)
-                    else:
-                        ref.getparent().remove(ref)
+                if (
+                    ref_run is not None
+                    and etree.QName(ref_run).localname == "r"
+                    and all(
+                        child is ref or etree.QName(child).localname == "rPr"
+                        for child in ref_run
+                    )
+                ):
+                    ref_run.getparent().remove(ref_run)
+                else:
+                    ref.getparent().remove(ref)
+                mutated = True
+
+            if mutated:
+                sync_part_blob(part)

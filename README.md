@@ -9,10 +9,12 @@ Python module for complete Word document comment manipulation - adding, replying
 
 ## Problem
 
-python-docx can read Word comments but cannot properly create or reply to them:
-- Creates `comments.xml` but no anchors in `document.xml`
-- Missing `commentsExtended.xml` (threading)
-- Missing `commentsIds.xml` (durable IDs)
+python-docx >= 1.2.0 can create basic comments (content plus anchors), but has
+no support for the rest of the comment machinery Word and Word Online rely on:
+- No `commentsExtended.xml` (threading, resolution/done status)
+- No `commentsIds.xml` (durable IDs)
+- No `commentsExtensible.xml` (modern comment metadata)
+- No reply, resolve, delete, or move operations
 
 Microsoft Graph API does NOT support Word comments (only Excel).
 
@@ -41,15 +43,15 @@ from docx import Document
 from docx_comments import CommentManager, PersonInfo
 
 doc = Document("document.docx")
-mgr = CommentManager(doc)
+mgr = CommentManager(doc)  # creates no parts until the first write
 
 # Author must be a PersonInfo object, not a raw string.
 
-# Add anchored comment to text range
+# Add an anchored comment. By default the whole paragraph is anchored;
+# start_run/end_run select a run range (indices are validated — out-of-range
+# values raise IndexError rather than anchoring the wrong text).
 comment_id = mgr.add_comment(
     paragraph=doc.paragraphs[0],
-    start_run=0,
-    end_run=2,
     text="Please review this section",
     author=PersonInfo(author="Reviewer Name"),
     initials="RN",
@@ -64,14 +66,16 @@ reply_id = mgr.reply_to_comment(
     initials="AN"
 )
 
-# Mark comment as resolved
+# Mark the comment's thread as resolved (thread-scoped, like Word)
 mgr.resolve_comment(comment_id)
 
-# Mark comment as unresolved
+# Mark it as unresolved again
 mgr.unresolve_comment(comment_id)
 
-# Move a comment to a new paragraph
-mgr.move_comment(
+# Move the whole thread to a new paragraph. (move_comment() moves a single
+# standalone comment and raises for threaded comments, so reply anchors can
+# never be left behind.)
+mgr.move_thread(
     comment_id=comment_id,
     paragraph=doc.paragraphs[1],
 )
@@ -155,13 +159,18 @@ falls back to system user info.
 
 ## OOXML Parts Handled
 
-This module manages five XML parts:
+This module manages six XML parts:
 
 1. **comments.xml** - Comment content and metadata
-2. **document.xml** - Anchors (`commentRangeStart/End`, `commentReference`)
+2. **document.xml** - Anchors (`commentRangeStart/End`, `commentReference`),
+   including anchors in headers, footers, tables, and footnotes/endnotes
 3. **commentsExtended.xml** - Threading (`paraId`, `paraIdParent`, `done`)
 4. **commentsIds.xml** - Durable IDs for persistence
-5. **people.xml** - Optional identity linkage (`w15:person`)
+5. **commentsExtensible.xml** - Modern comment metadata (`w16cex:dateUtc`)
+6. **people.xml** - Optional identity linkage (`w15:person`)
+
+Parts are created lazily: a `CommentManager` used only for reading
+(`list_comments()`, `get_comment_threads()`, …) leaves the document untouched.
 
 ## Requirements
 

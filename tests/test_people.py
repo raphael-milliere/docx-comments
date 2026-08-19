@@ -33,8 +33,9 @@ class TestPeopleXml:
 
     def test_add_person_without_presence(self, tmp_path):
         """Creating a person entry without presenceInfo should be valid."""
-        from lxml import etree
         from zipfile import ZipFile
+
+        from lxml import etree
 
         doc = Document()
         mgr = CommentManager(doc)
@@ -125,8 +126,9 @@ class TestPeopleXml:
 
     def test_existing_people_xml_preserved_on_comment(self, tmp_path):
         """Adding a comment should not remove existing people.xml data."""
-        from lxml import etree
         from zipfile import ZipFile
+
+        from lxml import etree
 
         doc = Document()
         para = doc.add_paragraph("Test text")
@@ -196,8 +198,9 @@ class TestPeopleXml:
 
     def test_add_comment_with_author_presence_personinfo(self, tmp_path):
         """Author PersonInfo with presence should create people.xml entry."""
-        from lxml import etree
         from zipfile import ZipFile
+
+        from lxml import etree
 
         doc = Document()
         para = doc.add_paragraph("Test text")

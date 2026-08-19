@@ -12,6 +12,7 @@ from zipfile import ZipFile
 from lxml import etree
 
 from docx_comments.models import PersonInfo
+from docx_comments.xml_parts import parse_xml_bytes
 
 
 def _system_office_user_info() -> Tuple[Optional[str], Optional[str]]:
@@ -47,8 +48,10 @@ def _macos_office_user_info() -> Tuple[Optional[str], Optional[str]]:
 
 
 def _windows_office_user_info() -> Tuple[Optional[str], Optional[str]]:
+    if sys.platform != "win32":
+        return None, None
     try:
-        import winreg  # type: ignore[import-not-found]
+        import winreg
     except Exception:
         return None, None
 
@@ -102,7 +105,7 @@ def _docx_single_person(
     if "word/people.xml" not in names:
         raise _DocxAuthorAmbiguous("DOCX author source has no people.xml")
     try:
-        xml = etree.fromstring(zf.read("word/people.xml"))
+        xml = parse_xml_bytes(zf.read("word/people.xml"))
     except Exception:
         raise _DocxAuthorAmbiguous("DOCX author source has invalid people.xml")
 
@@ -132,10 +135,10 @@ def _attr_by_localname(elem: etree._Element, localname: str) -> Optional[str]:
     for attr, value in elem.attrib.items():
         try:
             if etree.QName(attr).localname == localname:
-                return value
+                return str(value)
         except (ValueError, TypeError):
             if attr == localname:
-                return value
+                return str(value)
     return None
 
 

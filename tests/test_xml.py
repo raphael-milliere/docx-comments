@@ -36,8 +36,9 @@ class TestWordOnlineCompatibility:
 
     def test_comments_xml_structure(self, tmp_path):
         """Test comments.xml has correct structure."""
-        from lxml import etree
         from zipfile import ZipFile
+
+        from lxml import etree
 
         doc = Document()
         para = doc.add_paragraph("Test text")
@@ -68,8 +69,9 @@ class TestWordOnlineCompatibility:
 
     def test_threading_xml_structure(self, tmp_path):
         """Test commentsExtended.xml has correct threading structure."""
-        from lxml import etree
         from zipfile import ZipFile
+
+        from lxml import etree
 
         doc = Document()
         para = doc.add_paragraph("Test text")
@@ -110,8 +112,9 @@ class TestWordOnlineCompatibility:
 
     def test_resolved_status_in_xml(self, tmp_path):
         """Test that resolved status is correctly saved in XML."""
-        from lxml import etree
         from zipfile import ZipFile
+
+        from lxml import etree
 
         doc = Document()
         para = doc.add_paragraph("Test text")
@@ -133,8 +136,9 @@ class TestWordOnlineCompatibility:
 
     def test_document_xml_anchors(self, tmp_path):
         """Test that document.xml has proper comment anchors."""
-        from lxml import etree
         from zipfile import ZipFile
+
+        from lxml import etree
 
         doc = Document()
         para = doc.add_paragraph("This is test text to comment on.")
@@ -166,8 +170,9 @@ class TestWordOnlineCompatibility:
 
     def test_reply_anchor_ordering(self, tmp_path):
         """Ensure reply anchors keep commentRangeEnd before commentReference runs."""
-        from lxml import etree
         from zipfile import ZipFile
+
+        from lxml import etree
 
         doc = Document()
         para = doc.add_paragraph("This is test text to comment on.")

@@ -1,8 +1,10 @@
-"""Handlers for XML parts: comments.xml, commentsExtended.xml, commentsIds.xml, and people.xml."""
+"""Handlers for XML parts: comments.xml, commentsExtended.xml, commentsIds.xml,
+commentsExtensible.xml, and people.xml."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+import warnings
+from typing import TYPE_CHECKING, Any, Optional
 
 from docx.opc.packuri import PackURI
 from docx.opc.part import Part
@@ -11,7 +13,12 @@ from lxml import etree
 from docx_comments.models import PersonInfo
 
 if TYPE_CHECKING:
-    from docx import Document
+    from docx.document import Document
+
+try:  # python-docx >= 1.2.0 registers its own XmlPart class for comments.xml
+    from docx.parts.comments import CommentsPart as _NativeCommentsPart
+except ImportError:  # pragma: no cover - python-docx < 1.2.0
+    _NativeCommentsPart = None  # type: ignore[assignment, misc]
 
 
 # OOXML Namespaces
@@ -55,123 +62,204 @@ def _qn(ns: str, name: str) -> str:
     return f"{{{ns}}}{name}"
 
 
-class CommentsPart:
-    """Handler for word/comments.xml part.
+# Attribute names used to cache a parsed XML tree on a generic (blob-backed)
+# Part instance so every handler shares one live tree per part. The blob
+# snapshot detects consumers replacing part._blob directly, which invalidates
+# the cached tree.
+_CACHED_ELEMENT_ATTR = "_docx_comments_element"
+_CACHED_BLOB_ATTR = "_docx_comments_blob_snapshot"
 
-    Note: python-docx loads comments.xml as an XmlPart subclass (CommentsPart)
-    which uses _element for serialization, not _blob. We must work with
-    part._element directly to persist changes.
+# lxml parses blobs coming from inside the package; disable entity resolution
+# and network access so a hostile document cannot use DOCTYPE tricks (XXE)
+# through this library's own parsing.
+_SAFE_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
+
+
+def parse_xml_bytes(blob: bytes) -> etree._Element:
+    """Parse XML bytes with entity resolution disabled."""
+    return etree.fromstring(blob, _SAFE_PARSER)
+
+
+def part_is_blob_backed(part: Any) -> bool:
+    """True when the part serialises from its ``_blob`` (generic Part).
+
+    XmlPart subclasses serialise from their live ``_element``/``element``
+    instead, so writes to ``_blob`` would be silently ignored for them.
     """
+    return not (hasattr(part, "element") or hasattr(part, "_element"))
+
+
+def part_element(part: Any) -> Optional[etree._Element]:
+    """Return a live, mutable XML root for a part.
+
+    XmlPart subclasses expose their element directly and mutations persist on
+    save. Generic blob Parts get a parsed tree cached on the part object
+    itself so every handler instance shares one tree; call
+    :func:`sync_part_blob` after mutating it.
+    """
+    if part is None:
+        return None
+
+    if hasattr(part, "element"):
+        try:
+            elem = part.element
+            if elem is not None:
+                return elem
+        except (AttributeError, TypeError, ValueError, etree.XMLSyntaxError):
+            # Best-effort fallback for python-docx element access.
+            pass
+
+    if hasattr(part, "_element"):
+        if getattr(part, "_element", None) is None:
+            try:
+                part._element = parse_xml_bytes(part.blob)
+            except (AttributeError, TypeError, etree.XMLSyntaxError):
+                return None
+        return part._element
+
+    try:
+        blob = part.blob
+    except (AttributeError, TypeError):
+        return None
+    cached = getattr(part, _CACHED_ELEMENT_ATTR, None)
+    # Re-parse when the blob was replaced behind our back (identity check:
+    # sync_part_blob records the blob it wrote).
+    if cached is None or getattr(part, _CACHED_BLOB_ATTR, None) is not blob:
+        try:
+            cached = parse_xml_bytes(blob)
+        except (TypeError, ValueError, etree.XMLSyntaxError):
+            return None
+        setattr(part, _CACHED_ELEMENT_ATTR, cached)
+        setattr(part, _CACHED_BLOB_ATTR, blob)
+    return cached
+
+
+def sync_part_blob(part: Any) -> None:
+    """Persist the cached tree of a blob-backed part back into its blob.
+
+    No-op for XmlPart-backed parts (their element mutations persist on save)
+    and for parts whose tree was never parsed.
+    """
+    if part is None or not part_is_blob_backed(part):
+        return
+    cached = getattr(part, _CACHED_ELEMENT_ATTR, None)
+    if cached is not None:
+        blob = etree.tostring(
+            cached,
+            xml_declaration=True,
+            encoding="UTF-8",
+            standalone=True,
+        )
+        part._blob = blob
+        setattr(part, _CACHED_BLOB_ATTR, blob)
+
+
+class _BasePartHandler:
+    """Shared plumbing for the comment-related part handlers.
+
+    Reads prefer an XmlPart's live element; generic blob Parts get one parsed
+    tree cached on the part object (see :func:`part_element`) so concurrent
+    handler instances cannot clobber each other's writes.
+    """
+
+    _partname: str
+    _reltype: str
+    _content_type: str
+    _root_tag: str
+    _nsmap: dict
+    _ignorable: str
 
     def __init__(self, document: Document) -> None:
         self._document = document
-        self._xml: Optional[etree._Element] = None
 
-    def _get_part(self):
-        """Get the comments part from document relationships."""
+    def _get_part(self) -> Any:
+        """Get the part from the main document part's relationships."""
         for rel in self._document.part.rels.values():
-            if REL_COMMENTS in rel.reltype:
+            if self._reltype in rel.reltype:
                 return rel.target_part
         return None
 
     def ensure_exists(self) -> None:
-        """Ensure the comments part exists, creating if needed."""
+        """Ensure the part exists, creating it if needed."""
         if self._get_part() is None:
             self._create_part()
 
-    def _create_part(self) -> None:
-        """Create a new comments.xml part."""
-        # Create XML content with required namespaces
-        nsmap = {
-            "w": NS_W,
-            "w14": NS_W14,
-            "w15": NS_W15,
-            "mc": NS_MC,
-        }
-        root = etree.Element(
-            _qn(NS_W, "comments"),
-            nsmap=nsmap,
-        )
-        root.set(_qn(NS_MC, "Ignorable"), "w14 w15")
+    def _new_root(self) -> etree._Element:
+        root = etree.Element(self._root_tag, nsmap=self._nsmap)
+        if self._ignorable:
+            root.set(_qn(NS_MC, "Ignorable"), self._ignorable)
+        return root
 
+    def _create_part(self) -> None:
         xml_content = etree.tostring(
-            root,
+            self._new_root(),
             xml_declaration=True,
             encoding="UTF-8",
-            standalone="yes",
+            standalone=True,
         )
-
-        # Create generic part (python-docx will load it as XmlPart on next open)
         part = Part(
-            PackURI("/word/comments.xml"),
-            CT_COMMENTS,
+            PackURI(self._partname),
+            self._content_type,
             xml_content,
             self._document.part.package,
         )
-        self._document.part.relate_to(part, REL_COMMENTS)
+        self._document.part.relate_to(part, self._reltype)
 
     @property
     def xml(self) -> etree._Element:
         """Get the XML root element.
 
-        Handles two cases:
-        - XmlPart (from existing document): use part._element directly
-        - Generic Part (newly created): parse and cache from blob
+        When the part is missing, a detached empty root is returned so read
+        paths see "no entries". Mutating methods call ensure_exists() first,
+        so writes never land on a detached element.
+
+        Raises:
+            ValueError: If the part exists but its XML cannot be parsed
+                (raising is safer than silently dropping reads and writes).
         """
         part = self._get_part()
         if part is None:
-            # Shouldn't happen after ensure_exists
-            return etree.Element(_qn(NS_W, "comments"))
-
-        # Prefer public accessor when available (ensures _element initialized)
-        if hasattr(part, "element"):
-            try:
-                elem = part.element
-                if elem is not None:
-                    return elem
-            except (AttributeError, TypeError, ValueError, etree.XMLSyntaxError):
-                # Best-effort fallback for python-docx element access.
-                pass
-
-        # Fallback for XmlPart with private _element (ensure initialized)
-        if hasattr(part, "_element"):
-            if getattr(part, "_element", None) is None:
-                try:
-                    part._element = etree.fromstring(part.blob)
-                except (etree.XMLSyntaxError, AttributeError, TypeError):
-                    # XMLSyntaxError: malformed XML in blob
-                    # AttributeError: part lacks blob attribute
-                    # TypeError: blob is None or wrong type
-                    return etree.Element(_qn(NS_W, "comments"))
-            return part._element
-
-        # Generic Part - need to parse blob and maintain cache
-        if self._xml is None:
-            self._xml = etree.fromstring(part.blob)
-        return self._xml
+            return self._new_root()
+        elem = part_element(part)
+        if elem is None:
+            raise ValueError(
+                f"cannot read {self._partname}: the part exists but its XML "
+                "cannot be parsed"
+            )
+        return elem
 
     def _save(self) -> None:
-        """Save changes back to the part.
+        """Persist changes for blob-backed parts (no-op for XmlPart)."""
+        sync_part_blob(self._get_part())
 
-        - XmlPart: changes to _element persist automatically
-        - Generic Part: need to update _blob
+
+class CommentsPart(_BasePartHandler):
+    """Handler for word/comments.xml part.
+
+    Note: python-docx >= 1.2.0 loads comments.xml as an XmlPart subclass which
+    serialises from its live element, while older versions (and some created
+    parts) are generic blob Parts. part_element()/sync_part_blob() handle both.
+    """
+
+    _partname = "/word/comments.xml"
+    _reltype = REL_COMMENTS
+    _content_type = CT_COMMENTS
+    _root_tag = _qn(NS_W, "comments")
+    _nsmap = {"w": NS_W, "w14": NS_W14, "w15": NS_W15, "mc": NS_MC}
+    _ignorable = "w14 w15"
+
+    def _create_part(self) -> None:
+        """Create a new comments.xml part.
+
+        Prefer python-docx's registered CommentsPart class so its native
+        comments API (doc.comments / doc.add_comment) keeps working on the
+        same in-memory document.
         """
-        part = self._get_part()
-        if part is None:
+        if _NativeCommentsPart is not None:
+            part = _NativeCommentsPart.default(self._document.part.package)
+            self._document.part.relate_to(part, REL_COMMENTS)
             return
-
-        # XmlPart doesn't need explicit save
-        if hasattr(part, "_element"):
-            return
-
-        # Generic Part - update _blob from cached xml
-        if self._xml is not None:
-            part._blob = etree.tostring(
-                self._xml,
-                xml_declaration=True,
-                encoding="UTF-8",
-                standalone="yes",
-            )
+        super()._create_part()  # pragma: no cover - python-docx < 1.2.0
 
     def remove_comment(self, comment_id: str) -> Optional[list[str]]:
         """
@@ -184,7 +272,7 @@ class CommentsPart:
             List of paraIds found on the removed comment, or None if not found.
         """
         removed_para_ids: list[str] = []
-        removed = False
+        removed_count = 0
 
         for elem in list(self.xml):
             if etree.QName(elem).localname != "comment":
@@ -196,9 +284,15 @@ class CommentsPart:
                 if para_id:
                     removed_para_ids.append(para_id)
             elem.getparent().remove(elem)
-            removed = True
+            removed_count += 1
 
-        if removed:
+        if removed_count:
+            if removed_count > 1:
+                warnings.warn(
+                    f"multiple comments share id {comment_id}; all were removed",
+                    UserWarning,
+                    stacklevel=2,
+                )
             self._save()
             return removed_para_ids
 
@@ -215,94 +309,21 @@ def ensure_comment_parts(document: Document) -> None:
     - commentsIds.xml if missing
     - commentsExtensible.xml if missing
     """
-    # Ensure comments.xml (main comments part)
-    comments_part = CommentsPart(document)
-    comments_part.ensure_exists()
-
-    # Ensure commentsExtended.xml
-    ext_part = CommentsExtendedPart(document)
-    ext_part.ensure_exists()
-
-    # Ensure commentsIds.xml
-    ids_part = CommentsIdsPart(document)
-    ids_part.ensure_exists()
-
-    # Ensure commentsExtensible.xml (modern comments metadata)
-    extensible_part = CommentsExtensiblePart(document)
-    extensible_part.ensure_exists()
+    CommentsPart(document).ensure_exists()
+    CommentsExtendedPart(document).ensure_exists()
+    CommentsIdsPart(document).ensure_exists()
+    CommentsExtensiblePart(document).ensure_exists()
 
 
-class CommentsExtendedPart:
+class CommentsExtendedPart(_BasePartHandler):
     """Handler for word/commentsExtended.xml part."""
 
-    def __init__(self, document: Document) -> None:
-        self._document = document
-        self._xml: Optional[etree._Element] = None
-
-    def _get_part(self):
-        """Get the commentsExtended part from document relationships."""
-        for rel in self._document.part.rels.values():
-            if REL_COMMENTS_EXT in rel.reltype:
-                return rel.target_part
-        return None
-
-    def ensure_exists(self) -> None:
-        """Ensure the commentsExtended part exists, creating if needed."""
-        if self._get_part() is None:
-            self._create_part()
-
-    def _create_part(self) -> None:
-        """Create a new commentsExtended.xml part."""
-        # Create XML content
-        nsmap = {
-            "mc": NS_MC,
-            "w15": NS_W15,
-        }
-        root = etree.Element(
-            _qn(NS_W15, "commentsEx"),
-            nsmap=nsmap,
-        )
-        root.set(_qn(NS_MC, "Ignorable"), "w15")
-
-        xml_content = etree.tostring(
-            root,
-            xml_declaration=True,
-            encoding="UTF-8",
-            standalone="yes",
-        )
-
-        # Add part to document
-        # Note: This requires accessing python-docx internals
-        part = Part(
-            PackURI("/word/commentsExtended.xml"),
-            CT_COMMENTS_EXT,
-            xml_content,
-            self._document.part.package,
-        )
-        self._document.part.relate_to(part, REL_COMMENTS_EXT)
-
-    @property
-    def xml(self) -> etree._Element:
-        """Get the XML root element."""
-        if self._xml is None:
-            part = self._get_part()
-            if part:
-                self._xml = etree.fromstring(part.blob)
-            else:
-                # Return empty element if part doesn't exist
-                self._xml = etree.Element(_qn(NS_W15, "commentsEx"))
-        return self._xml
-
-    def _save(self) -> None:
-        """Save changes back to the part."""
-        part = self._get_part()
-        if part:
-            part._blob = etree.tostring(
-                self.xml,
-                xml_declaration=True,
-                encoding="UTF-8",
-                standalone="yes",
-            )
+    _partname = "/word/commentsExtended.xml"
+    _reltype = REL_COMMENTS_EXT
+    _content_type = CT_COMMENTS_EXT
+    _root_tag = _qn(NS_W15, "commentsEx")
+    _nsmap = {"mc": NS_MC, "w15": NS_W15}
+    _ignorable = "w15"
 
     def get_threading_info(self) -> dict[str, dict]:
         """
@@ -338,6 +359,7 @@ class CommentsExtendedPart:
             parent_para_id: Paragraph ID of parent (for replies).
             done: Whether comment is resolved.
         """
+        self.ensure_exists()
         elem = etree.Element(_qn(NS_W15, "commentEx"))
         elem.set(_qn(NS_W15, "paraId"), para_id)
         elem.set(_qn(NS_W15, "done"), "1" if done else "0")
@@ -365,12 +387,18 @@ class CommentsExtendedPart:
             para_id: Paragraph ID of the comment.
             done: Whether comment is resolved.
         """
+        updated = False
+        # Update every matching entry: documents from other tools may carry
+        # duplicate commentEx elements for one paraId (get_threading_info is
+        # last-match-wins, so a first-match-only write would not stick).
         for elem in self.xml:
             if etree.QName(elem).localname == "commentEx":
                 if elem.get(_qn(NS_W15, "paraId")) == para_id:
                     elem.set(_qn(NS_W15, "done"), "1" if done else "0")
-                    self._save()
-                    return
+                    updated = True
+        if updated:
+            self._save()
+            return
         raise ValueError(f"Comment with para_id {para_id} not found in commentsExtended")
 
     def set_parent(self, para_id: str, parent_para_id: Optional[str]) -> bool:
@@ -384,6 +412,9 @@ class CommentsExtendedPart:
         Returns:
             True if an entry was updated, False otherwise.
         """
+        updated = False
+        # Update every matching entry: documents from other tools may carry
+        # duplicate commentEx elements for one paraId.
         for elem in self.xml:
             if etree.QName(elem).localname != "commentEx":
                 continue
@@ -393,9 +424,10 @@ class CommentsExtendedPart:
                 elem.set(_qn(NS_W15, "paraIdParent"), parent_para_id)
             else:
                 elem.attrib.pop(_qn(NS_W15, "paraIdParent"), None)
+            updated = True
+        if updated:
             self._save()
-            return True
-        return False
+        return updated
 
     def remove_comment_ex(self, para_id: str) -> bool:
         """
@@ -420,79 +452,34 @@ class CommentsExtendedPart:
         return removed
 
 
-class CommentsExtensiblePart:
+class CommentsExtensiblePart(_BasePartHandler):
     """Handler for word/commentsExtensible.xml part."""
 
-    def __init__(self, document: Document) -> None:
-        self._document = document
-        self._xml: Optional[etree._Element] = None
+    _partname = "/word/commentsExtensible.xml"
+    _reltype = REL_COMMENTS_EXTENSIBLE
+    _content_type = CT_COMMENTS_EXTENSIBLE
+    _root_tag = _qn(NS_W16CEX, "commentsExtensible")
+    _nsmap = {"mc": NS_MC, "w16cex": NS_W16CEX}
+    _ignorable = "w16cex"
 
-    def _get_part(self):
-        """Get the commentsExtensible part from document relationships."""
+    def _get_part(self) -> Any:
+        """Get the commentsExtensible part.
+
+        Falls back to a package-wide partname scan for documents whose part
+        exists but is not related from the main document part; Word only
+        loads the part through that relationship, so it is added on the spot.
+        """
         doc_part = self._document.part
         for rel in doc_part.rels.values():
-            if "commentsExtensible" in rel.reltype:
+            if REL_COMMENTS_EXTENSIBLE in rel.reltype:
                 return rel.target_part
         package = getattr(doc_part, "package", None)
         if package is not None:
             for part in getattr(package, "parts", []):
                 if str(part.partname) == "/word/commentsExtensible.xml":
+                    doc_part.relate_to(part, REL_COMMENTS_EXTENSIBLE)
                     return part
         return None
-
-    def ensure_exists(self) -> None:
-        """Ensure the commentsExtensible part exists, creating if needed."""
-        if self._get_part() is None:
-            self._create_part()
-
-    def _create_part(self) -> None:
-        """Create a new commentsExtensible.xml part."""
-        nsmap = {
-            "mc": NS_MC,
-            "w16cex": NS_W16CEX,
-        }
-        root = etree.Element(
-            _qn(NS_W16CEX, "commentsExtensible"),
-            nsmap=nsmap,
-        )
-        root.set(_qn(NS_MC, "Ignorable"), "w16cex")
-
-        xml_content = etree.tostring(
-            root,
-            xml_declaration=True,
-            encoding="UTF-8",
-            standalone="yes",
-        )
-
-        part = Part(
-            PackURI("/word/commentsExtensible.xml"),
-            CT_COMMENTS_EXTENSIBLE,
-            xml_content,
-            self._document.part.package,
-        )
-        self._document.part.relate_to(part, REL_COMMENTS_EXTENSIBLE)
-
-    @property
-    def xml(self) -> etree._Element:
-        """Get the XML root element."""
-        if self._xml is None:
-            part = self._get_part()
-            if part:
-                self._xml = etree.fromstring(part.blob)
-            else:
-                self._xml = etree.Element(_qn(NS_W16CEX, "commentsExtensible"))
-        return self._xml
-
-    def _save(self) -> None:
-        """Save changes back to the part."""
-        part = self._get_part()
-        if part:
-            part._blob = etree.tostring(
-                self.xml,
-                xml_declaration=True,
-                encoding="UTF-8",
-                standalone="yes",
-            )
 
     def get_extensible_info(self) -> dict[str, dict]:
         """
@@ -518,6 +505,7 @@ class CommentsExtensiblePart:
             durable_id: Durable ID for the comment.
             date_utc: Optional UTC timestamp (ISO8601, Z-terminated).
         """
+        self.ensure_exists()
         for elem in self.xml:
             if (
                 etree.QName(elem).localname == "commentExtensible"
@@ -557,76 +545,15 @@ class CommentsExtensiblePart:
         return removed
 
 
-class CommentsIdsPart:
+class CommentsIdsPart(_BasePartHandler):
     """Handler for word/commentsIds.xml part."""
 
-    def __init__(self, document: Document) -> None:
-        self._document = document
-        self._xml: Optional[etree._Element] = None
-
-    def _get_part(self):
-        """Get the commentsIds part from document relationships."""
-        for rel in self._document.part.rels.values():
-            if REL_COMMENTS_IDS in rel.reltype:
-                return rel.target_part
-        return None
-
-    def ensure_exists(self) -> None:
-        """Ensure the commentsIds part exists, creating if needed."""
-        if self._get_part() is None:
-            self._create_part()
-
-    def _create_part(self) -> None:
-        """Create a new commentsIds.xml part."""
-        # Create XML content
-        nsmap = {
-            "mc": NS_MC,
-            "w16cid": NS_W16CID,
-        }
-        root = etree.Element(
-            _qn(NS_W16CID, "commentsIds"),
-            nsmap=nsmap,
-        )
-        root.set(_qn(NS_MC, "Ignorable"), "w16cid")
-
-        xml_content = etree.tostring(
-            root,
-            xml_declaration=True,
-            encoding="UTF-8",
-            standalone="yes",
-        )
-
-        # Add part to document
-        part = Part(
-            PackURI("/word/commentsIds.xml"),
-            CT_COMMENTS_IDS,
-            xml_content,
-            self._document.part.package,
-        )
-        self._document.part.relate_to(part, REL_COMMENTS_IDS)
-
-    @property
-    def xml(self) -> etree._Element:
-        """Get the XML root element."""
-        if self._xml is None:
-            part = self._get_part()
-            if part:
-                self._xml = etree.fromstring(part.blob)
-            else:
-                # Return empty element if part doesn't exist
-                self._xml = etree.Element(_qn(NS_W16CID, "commentsIds"))
-        return self._xml
-
-    def _save(self) -> None:
-        """Save changes back to the part."""
-        part = self._get_part()
-        if part:
-            part._blob = etree.tostring(
-                self.xml,
-                xml_declaration=True,
-                encoding="UTF-8",
-                standalone="yes",
-            )
+    _partname = "/word/commentsIds.xml"
+    _reltype = REL_COMMENTS_IDS
+    _content_type = CT_COMMENTS_IDS
+    _root_tag = _qn(NS_W16CID, "commentsIds")
+    _nsmap = {"mc": NS_MC, "w16cid": NS_W16CID}
+    _ignorable = "w16cid"
 
     def get_durable_ids(self) -> dict[str, str]:
         """
@@ -652,6 +579,7 @@ class CommentsIdsPart:
             para_id: Paragraph ID of the comment.
             durable_id: Durable ID for persistence.
         """
+        self.ensure_exists()
         elem = etree.SubElement(self.xml, _qn(NS_W16CID, "commentId"))
         elem.set(_qn(NS_W16CID, "paraId"), para_id)
         elem.set(_qn(NS_W16CID, "durableId"), durable_id)
@@ -682,87 +610,25 @@ class CommentsIdsPart:
         return removed_durable_id
 
 
-class PeoplePart:
+class PeoplePart(_BasePartHandler):
     """Handler for word/people.xml part."""
 
-    def __init__(self, document: Document) -> None:
-        self._document = document
-        self._xml: Optional[etree._Element] = None
-
-    def _get_part(self):
-        """Get the people part from document relationships."""
-        for rel in self._document.part.rels.values():
-            if REL_PEOPLE in rel.reltype:
-                return rel.target_part
-        return None
-
-    def ensure_exists(self) -> None:
-        """Ensure the people part exists, creating if needed."""
-        if self._get_part() is None:
-            self._create_part()
-            self._xml = None
-
-    def _create_part(self) -> None:
-        """Create a new people.xml part."""
-        nsmap = {
-            "mc": NS_MC,
-            "w": NS_W,
-            "w14": NS_W14,
-            "w15": NS_W15,
-            "wp14": NS_WP14,
-        }
-        root = etree.Element(
-            _qn(NS_W15, "people"),
-            nsmap=nsmap,
-        )
-        root.set(_qn(NS_MC, "Ignorable"), "w14 w15 wp14")
-
-        xml_content = etree.tostring(
-            root,
-            xml_declaration=True,
-            encoding="UTF-8",
-            standalone="yes",
-        )
-
-        part = Part(
-            PackURI("/word/people.xml"),
-            CT_PEOPLE,
-            xml_content,
-            self._document.part.package,
-        )
-        self._document.part.relate_to(part, REL_PEOPLE)
-
-    @property
-    def xml(self) -> etree._Element:
-        """Get the XML root element."""
-        if self._xml is None:
-            part = self._get_part()
-            if part:
-                self._xml = etree.fromstring(part.blob)
-            else:
-                self._xml = etree.Element(_qn(NS_W15, "people"))
-        return self._xml
-
-    def _save(self) -> None:
-        """Save changes back to the part."""
-        part = self._get_part()
-        if part:
-            part._blob = etree.tostring(
-                self.xml,
-                xml_declaration=True,
-                encoding="UTF-8",
-                standalone="yes",
-            )
+    _partname = "/word/people.xml"
+    _reltype = REL_PEOPLE
+    _content_type = CT_PEOPLE
+    _root_tag = _qn(NS_W15, "people")
+    _nsmap = {"mc": NS_MC, "w": NS_W, "w14": NS_W14, "w15": NS_W15, "wp14": NS_WP14}
+    _ignorable = "w14 w15 wp14"
 
     @staticmethod
     def _attr_by_localname(elem: etree._Element, localname: str) -> Optional[str]:
         for attr, value in elem.attrib.items():
             try:
                 if etree.QName(attr).localname == localname:
-                    return value
+                    return str(value)
             except (ValueError, TypeError):
                 if attr == localname:
-                    return value
+                    return str(value)
         return None
 
     @staticmethod
@@ -827,14 +693,20 @@ class PeoplePart:
         if not author:
             raise ValueError("author must be non-empty")
 
+        # Validate presence before touching the package so a bad spec cannot
+        # leave an empty people.xml part behind.
+        normalized: Optional[tuple[str, str]] = None
+        if presence:
+            normalized = self._normalize_presence(presence)
+
         person_elem = self._find_person_elem(author)
         if person_elem is None:
             self.ensure_exists()
             person_elem = etree.SubElement(self.xml, _qn(NS_W15, "person"))
             person_elem.set(_qn(NS_W15, "author"), author)
 
-        if presence:
-            provider_id, user_id = self._normalize_presence(presence)
+        if normalized:
+            provider_id, user_id = normalized
             presence_elem = self._find_child_by_localname(person_elem, "presenceInfo")
             if presence_elem is None:
                 presence_elem = etree.SubElement(person_elem, _qn(NS_W15, "presenceInfo"))
