@@ -1203,3 +1203,102 @@ class TestMcIgnorableMigration:
 
         ignorable = root.get(qn(NS_MC, "Ignorable"))
         assert ignorable is not None and "w14" in ignorable.split()
+
+
+class TestBlockLevelAnchors:
+    def _hoist_to_body(self, doc, p_first, p_last):
+        body = doc.element.body
+        start = body.find(f".//{qn(NS_W, 'commentRangeStart')}")
+        end = body.find(f".//{qn(NS_W, 'commentRangeEnd')}")
+        p_first._element.addprevious(start)
+        p_last._element.addnext(end)
+
+    def test_reply_to_body_level_range_is_schema_valid(self, tmp_path):
+        doc = Document()
+        p1 = doc.add_paragraph("first")
+        p2 = doc.add_paragraph("second")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(p1, "root", PersonInfo(author="A"))
+        self._hoist_to_body(doc, p1, p2)
+        rid = mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        body = doc.element.body
+        assert all(etree.QName(c).localname != "r" for c in body), (
+            "bare w:r under w:body is schema-invalid"
+        )
+        path = tmp_path / "b.docx"
+        doc.save(str(path))
+        doc2 = Document(str(path))
+        threads = CommentManager(doc2).get_comment_threads()
+        assert len(threads) == 1 and threads[0].reply_count == 1
+        assert threads[0].replies[0].comment_id == rid
+
+    def test_reply_body_level_without_parent_ref_run(self):
+        doc = Document()
+        p1 = doc.add_paragraph("first")
+        p2 = doc.add_paragraph("second")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(p1, "root", PersonInfo(author="A"))
+        self._hoist_to_body(doc, p1, p2)
+        # Strip the parent's reference run to force the descend-into-
+        # paragraph fallback.
+        ref = doc.element.body.find(f".//{qn(NS_W, 'commentReference')}")
+        ref_run = ref.getparent()
+        ref_run.getparent().remove(ref_run)
+        mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        body = doc.element.body
+        assert all(etree.QName(c).localname != "r" for c in body)
+        # Reference run landed inside the last paragraph of the range.
+        assert p2._element.find(f".//{qn(NS_W, 'commentReference')}") is not None
+
+    def test_reply_to_tr_level_range_is_schema_valid(self):
+        doc = Document()
+        table = doc.add_table(rows=1, cols=2)
+        cell_para = table.cell(0, 0).paragraphs[0]
+        cell_para.add_run("cell text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(cell_para, "root", PersonInfo(author="A"))
+        tr = table._tbl.tr_lst[0]
+        start = tr.find(f".//{qn(NS_W, 'commentRangeStart')}")
+        end = tr.find(f".//{qn(NS_W, 'commentRangeEnd')}")
+        first_tc = tr.find(qn(NS_W, "tc"))
+        first_tc.addprevious(start)
+        tr.append(end)
+        mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        assert all(etree.QName(c).localname != "r" for c in tr), (
+            "bare w:r under w:tr is schema-invalid"
+        )
+
+    def test_reply_to_reference_only_anchor(self, tmp_path):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "root", PersonInfo(author="A"))
+        # Strip range markers, keep the reference (legal per ECMA-376).
+        body = doc.element.body
+        for tag in ("commentRangeStart", "commentRangeEnd"):
+            for elem in list(body.iter(qn(NS_W, tag))):
+                elem.getparent().remove(elem)
+        rid = mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        path = tmp_path / "r.docx"
+        doc.save(str(path))
+        doc2 = Document(str(path))
+        threads = CommentManager(doc2).get_comment_threads()
+        assert len(threads) == 1 and threads[0].reply_count == 1
+        # Range markers were synthesized for the reply.
+        starts = [
+            e for e in doc2.element.body.iter(qn(NS_W, "commentRangeStart"))
+            if e.get(qn(NS_W, "id")) == rid
+        ]
+        assert len(starts) == 1
+
+    def test_reply_with_no_anchors_at_all_still_raises(self):
+        from docx_comments.anchors import CommentAnchor
+
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "root", PersonInfo(author="A"))
+        CommentAnchor(doc).remove_anchors(cid)
+        with pytest.raises(ValueError, match="Could not find anchors"):
+            mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        assert len(list(mgr.list_comments())) == 1, "no orphan reply left behind"

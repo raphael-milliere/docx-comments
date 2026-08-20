@@ -1079,9 +1079,12 @@ class CommentManager:
         anchor_parent_id = root_comment.comment_id or parent_id
 
         # Validate the anchor location before writing the reply so a failure
-        # cannot leave an anchor-less comment behind.
-        _, parent_start, parent_end, _ = anchor._find_anchor_elements(anchor_parent_id)
-        if parent_start is None or parent_end is None:
+        # cannot leave an anchor-less comment behind. A reference run alone is
+        # a legal anchor (range markers are optional per ECMA-376 §17.13.4).
+        _, parent_start, parent_end, parent_ref = anchor._find_anchor_elements(
+            anchor_parent_id
+        )
+        if (parent_start is None or parent_end is None) and parent_ref is None:
             raise ValueError(f"Could not find anchors for comment {anchor_parent_id}")
 
         comment_id = self._new_comment_id()

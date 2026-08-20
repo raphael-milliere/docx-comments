@@ -117,7 +117,11 @@ class CommentAnchor:
 
         Matching is done in Python (not via path predicates) so ids read from
         arbitrary documents cannot alter or break the query.
+
+        Returns (part, None, None, reference) for comments anchored only by a
+        commentReference run; (None, None, None, None) when nothing matches.
         """
+        fallback: tuple = (None, None, None, None)
         for part, root in self._iter_anchor_parts():
             start = end = ref = None
             for elem in root.iter(_START_TAG, _END_TAG, _REF_TAG):
@@ -131,8 +135,10 @@ class CommentAnchor:
                     ref = elem
             if start is not None and end is not None:
                 return part, start, end, ref
+            if ref is not None and fallback[3] is None:
+                fallback = (part, None, None, ref)
 
-        return None, None, None, None
+        return fallback
 
     def _iter_paragraphs(self) -> Iterator[Paragraph]:
         for para in self._document.paragraphs:
@@ -416,6 +422,54 @@ class CommentAnchor:
         range_start.addnext(range_end)
         range_end.addnext(ref_run)
 
+    @staticmethod
+    def _has_paragraph_ancestor(elem: etree._Element) -> bool:
+        parent = elem.getparent()
+        while parent is not None:
+            if etree.QName(parent).localname == "p":
+                return True
+            parent = parent.getparent()
+        return False
+
+    @staticmethod
+    def _last_paragraph_before(elem: etree._Element) -> Optional[etree._Element]:
+        """Last w:p in document order before `elem`, searching up the tree."""
+        p_tag = _qn(NS_W, "p")
+        current: Optional[etree._Element] = elem
+        while current is not None:
+            for sib in current.itersiblings(preceding=True):
+                if sib.tag == p_tag:
+                    return sib
+                inner = sib.findall(f".//{p_tag}")
+                if inner:
+                    return inner[-1]
+            current = current.getparent()
+            if current is not None and current.tag == p_tag:
+                return current
+        return None
+
+    def _add_anchors_around_reference(
+        self, parent_ref: etree._Element, new_comment_id: str
+    ) -> None:
+        """Anchor a reply around a parent that has only a reference run."""
+        ref_run_parent = parent_ref.getparent()
+        target = (
+            ref_run_parent
+            if ref_run_parent is not None
+            and etree.QName(ref_run_parent).localname == "r"
+            else parent_ref
+        )
+        new_start = etree.Element(_START_TAG)
+        new_start.set(_ID_ATTR, new_comment_id)
+        target.addprevious(new_start)
+        new_end = etree.Element(_END_TAG)
+        new_end.set(_ID_ATTR, new_comment_id)
+        target.addnext(new_end)
+        ref_run = etree.Element(_qn(NS_W, "r"))
+        ref = etree.SubElement(ref_run, _REF_TAG)
+        ref.set(_ID_ATTR, new_comment_id)
+        new_end.addnext(ref_run)
+
     def add_anchors_at_comment(
         self,
         parent_comment_id: str,
@@ -431,10 +485,21 @@ class CommentAnchor:
             new_comment_id: ID of the new comment.
         """
         # Find the parent comment's anchors
-        part, parent_start, parent_end, _ = self._find_anchor_elements(parent_comment_id)
+        part, parent_start, parent_end, parent_ref = self._find_anchor_elements(
+            parent_comment_id
+        )
 
         if parent_start is None or parent_end is None:
-            raise ValueError(f"Could not find anchors for comment {parent_comment_id}")
+            if parent_ref is None:
+                raise ValueError(
+                    f"Could not find anchors for comment {parent_comment_id}"
+                )
+            # Reference-only anchor (range markers are optional per ECMA-376
+            # §17.13.4): synthesize a range around the parent's reference run
+            # for the new comment, mirroring what Word produces on re-save.
+            self._add_anchors_around_reference(parent_ref, new_comment_id)
+            sync_part_blob(part)
+            return
 
         # Add new anchors after any existing anchor group for this location.
         def is_comment_ref_run(elem: etree._Element) -> bool:
@@ -464,16 +529,40 @@ class CommentAnchor:
         new_end.set(_ID_ATTR, new_comment_id)
         insert_end_after.addnext(new_end)
 
-        # Add reference run after existing commentReference runs (if any).
+        # Place the reference run at a schema-valid run position. A bare run
+        # directly under w:body/w:tbl/w:tr/w:tc (block-level ranges) makes
+        # document.xml invalid and triggers Word's repair prompt.
         ref_run = etree.Element(_qn(NS_W, "r"))
         ref = etree.SubElement(ref_run, _REF_TAG)
         ref.set(_ID_ATTR, new_comment_id)
-        insert_ref_after = new_end
-        sibling = new_end.getnext()
-        while sibling is not None and is_comment_ref_run(sibling):
-            insert_ref_after = sibling
-            sibling = sibling.getnext()
-        insert_ref_after.addnext(ref_run)
+
+        anchor_after: Optional[etree._Element] = None
+        if parent_ref is not None:
+            parent_ref_run = parent_ref.getparent()
+            if (
+                parent_ref_run is not None
+                and etree.QName(parent_ref_run).localname == "r"
+            ):
+                anchor_after = parent_ref_run
+        if anchor_after is None and self._has_paragraph_ancestor(new_end):
+            anchor_after = new_end
+
+        if anchor_after is not None:
+            insert_ref_after = anchor_after
+            sibling = insert_ref_after.getnext()
+            while sibling is not None and is_comment_ref_run(sibling):
+                insert_ref_after = sibling
+                sibling = sibling.getnext()
+            insert_ref_after.addnext(ref_run)
+        else:
+            para = self._last_paragraph_before(new_end)
+            if para is None:
+                raise ValueError(
+                    f"cannot place the comment reference run for comment "
+                    f"{new_comment_id}: no paragraph found within the range "
+                    f"of comment {parent_comment_id}"
+                )
+            para.append(ref_run)
 
         # Persist for blob-backed parts (footnotes/endnotes).
         sync_part_blob(part)
