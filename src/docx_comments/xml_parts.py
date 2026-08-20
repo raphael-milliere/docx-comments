@@ -155,6 +155,25 @@ def sync_part_blob(part: Any) -> None:
         setattr(part, _CACHED_BLOB_ATTR, blob)
 
 
+def ensure_mc_ignorable(root: etree._Element, prefixes: tuple = ("w14", "w15")) -> bool:
+    """Add missing prefixes to the root's mc:Ignorable attribute.
+
+    Only prefixes actually declared on the root are added (ISO 29500-3
+    requires ignorable prefixes to be in scope), and only when the mc
+    namespace itself is declared (lxml cannot add declarations to an
+    existing root). Returns True when the attribute was modified.
+    """
+    declared = root.nsmap or {}
+    if NS_MC not in declared.values():
+        return False
+    current = (root.get(_qn(NS_MC, "Ignorable")) or "").split()
+    additions = [p for p in prefixes if p in declared and p not in current]
+    if not additions:
+        return False
+    root.set(_qn(NS_MC, "Ignorable"), " ".join(current + additions))
+    return True
+
+
 class _BasePartHandler:
     """Shared plumbing for the comment-related part handlers.
 
@@ -258,6 +277,9 @@ class CommentsPart(_BasePartHandler):
         """
         if _NativeCommentsPart is not None:
             part = _NativeCommentsPart.default(self._document.part.package)
+            # The native template declares w14/mc but omits mc:Ignorable;
+            # this library writes w14:paraId/textId, so declare it ignorable.
+            ensure_mc_ignorable(part.element)
             self._document.part.relate_to(part, REL_COMMENTS)
             return
         super()._create_part()  # pragma: no cover - python-docx < 1.2.0
@@ -338,7 +360,9 @@ class CommentsExtendedPart(_BasePartHandler):
             if etree.QName(elem).localname == "commentEx":
                 para_id = elem.get(_qn(NS_W15, "paraId"))
                 parent = elem.get(_qn(NS_W15, "paraIdParent"))
-                done = elem.get(_qn(NS_W15, "done"), "0") == "1"
+                done_raw = elem.get(_qn(NS_W15, "done"), "0")
+                # w15:done is ST_OnOff: "1"/"true"/"on" are all resolved.
+                done = done_raw.strip().lower() in ("1", "true", "on")
                 if para_id:
                     result[para_id] = {
                         "parent_para_id": parent,

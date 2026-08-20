@@ -11,6 +11,7 @@ from docx_comments.anchors import REL_FOOTNOTES, CommentAnchor
 from docx_comments.xml_parts import (
     CommentsExtendedPart,
     CommentsIdsPart,
+    CommentsPart,
     parse_xml_bytes,
     part_element,
 )
@@ -19,6 +20,7 @@ NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS_W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
 NS_W15 = "http://schemas.microsoft.com/office/word/2012/wordml"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
+NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 
 CT_FOOTNOTES = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"
@@ -1157,3 +1159,47 @@ class TestMixedReferenceRuns:
             for t in el.iter(qn(NS_W, "t"))
         ]
         assert spanned_text == ["beta"]
+
+
+class TestDoneLexicalForms:
+    """w15:done is ST_OnOff: "1"/"true"/"on" all mean resolved."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [("1", True), ("true", True), ("on", True), ("0", False),
+         ("false", False), ("off", False), ("garbage", False), (" TRUE ", True)],
+    )
+    def test_st_onoff_values(self, raw, expected):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        ext = CommentsExtendedPart(doc)
+        for elem in ext.xml:
+            if etree.QName(elem).localname == "commentEx":
+                elem.set(qn(NS_W15, "done"), raw)
+        ext._save()
+        comment = next(iter(mgr.list_comments()))
+        assert comment.is_resolved is expected
+
+
+class TestMcIgnorableMigration:
+    """migrate_comment_metadata declares mc:Ignorable when backfilling w14."""
+
+    def test_migrate_adds_mc_ignorable_when_backfilling(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", author_obj("A"))
+        root = CommentsPart(doc).xml
+        # Simulate a foreign comments.xml: prefixes declared on the root but
+        # no mc:Ignorable and no w14 paragraph attributes.
+        root.attrib.pop(qn(NS_MC, "Ignorable"), None)
+        for p in root.iter(qn(NS_W, "p")):
+            p.attrib.pop(qn(NS_W14, "paraId"), None)
+            p.attrib.pop(qn(NS_W14, "textId"), None)
+
+        mgr.migrate_comment_metadata()
+
+        ignorable = root.get(qn(NS_MC, "Ignorable"))
+        assert ignorable is not None and "w14" in ignorable.split()

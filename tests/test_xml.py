@@ -1,6 +1,9 @@
 """Word Online compatibility and XML structure tests."""
 
+import zipfile
+
 from docx import Document
+from lxml import etree
 
 from docx_comments import CommentManager, PersonInfo
 
@@ -249,3 +252,17 @@ class TestWordOnlineCompatibility:
         # Find resolved thread
         resolved_thread = next(t for t in threads if t.root.text == "Comment on second para")
         assert resolved_thread.is_resolved
+
+
+def test_comments_xml_declares_mc_ignorable(tmp_path):
+    doc = Document()
+    para = doc.add_paragraph("text")
+    mgr = CommentManager(doc)
+    mgr.add_comment(para, "c", PersonInfo(author="A"))
+    path = tmp_path / "out.docx"
+    doc.save(str(path))
+    with zipfile.ZipFile(path) as zf:
+        root = etree.fromstring(zf.read("word/comments.xml"))
+    ns_mc = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+    ignorable = root.get(f"{{{ns_mc}}}Ignorable")
+    assert ignorable is not None and "w14" in ignorable.split()

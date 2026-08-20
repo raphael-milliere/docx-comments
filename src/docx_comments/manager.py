@@ -21,6 +21,7 @@ from docx_comments.xml_parts import (
     CommentsPart,
     PeoplePart,
     ensure_comment_parts,
+    ensure_mc_ignorable,
 )
 
 if TYPE_CHECKING:
@@ -459,6 +460,9 @@ class CommentManager:
                 )
 
         if updated_comments:
+            # Backfilled w14 attributes must be declared ignorable on roots
+            # that do not already say so (e.g. foreign comments.xml parts).
+            ensure_mc_ignorable(self._comments_xml)
             self._save_comments()
 
         # Repair leftovers: metadata keyed to paraIds that no longer match a
