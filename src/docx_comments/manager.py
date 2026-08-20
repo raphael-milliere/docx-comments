@@ -12,7 +12,12 @@ from lxml import etree
 
 from docx_comments.anchors import CommentAnchor
 from docx_comments.exceptions import CommentNotFoundError
-from docx_comments.models import CommentInfo, CommentThread, PersonInfo
+from docx_comments.models import (
+    CommentContent,
+    CommentInfo,
+    CommentThread,
+    PersonInfo,
+)
 from docx_comments.system_author import _default_person_from_system
 from docx_comments.xml_parts import (
     CommentsExtendedPart,
@@ -813,6 +818,49 @@ class CommentManager:
 
         return author_name, presence
 
+    _ALLOWED_RUN_FORMATS = frozenset({"bold", "italic", "underline"})
+
+    def _normalize_content(
+        self, content: CommentContent
+    ) -> list[list[tuple[str, dict]]]:
+        """Normalize comment content to paragraphs of (text, format) runs.
+
+        Validates types, format keys, and XML-legality up front so callers
+        can raise before mutating anything.
+        """
+        if isinstance(content, str):
+            _validate_xml_text(content, "comment text")
+            return [[(content, {})]]
+        paragraphs: list[list[tuple[str, dict]]] = []
+        for para_spec in content:
+            if isinstance(para_spec, str):
+                _validate_xml_text(para_spec, "comment text")
+                paragraphs.append([(para_spec, {})])
+                continue
+            runs: list[tuple[str, dict]] = []
+            for run_spec in para_spec:
+                fmt: dict = {}
+                if isinstance(run_spec, str):
+                    run_text = run_spec
+                else:
+                    run_text, fmt = run_spec
+                    if not isinstance(run_text, str) or not isinstance(fmt, dict):
+                        raise TypeError(
+                            "run specs must be str or (str, dict) tuples"
+                        )
+                    unknown = set(fmt) - self._ALLOWED_RUN_FORMATS
+                    if unknown:
+                        raise ValueError(
+                            f"unsupported run formatting keys: {sorted(unknown)}"
+                        )
+                    fmt = dict(fmt)
+                _validate_xml_text(run_text, "comment text")
+                runs.append((run_text, fmt))
+            paragraphs.append(runs)
+        if not paragraphs:
+            raise ValueError("comment content must have at least one paragraph")
+        return paragraphs
+
     def _get_default_author_person(
         self,
         docx_path: Optional[str] = None,
@@ -964,7 +1012,7 @@ class CommentManager:
     def add_comment(
         self,
         paragraph: Paragraph,
-        text: str,
+        text: CommentContent,
         author: PersonInfo,
         initials: Optional[str] = None,
         start_run: int = 0,
@@ -978,8 +1026,12 @@ class CommentManager:
         Args:
             paragraph: The paragraph to comment on (must belong to this
                 manager's document).
-            text: Comment text. Newlines and tabs are preserved (encoded as
-                w:br / w:tab so Word renders them).
+            text: Comment content. A plain str is one paragraph; newlines
+                and tabs are preserved (encoded as w:br / w:tab so Word
+                renders them). A sequence of paragraphs is also accepted,
+                each a str or a sequence of runs, where a run is a str or
+                (text, format) with format keys "bold"/"italic"/"underline",
+                e.g. ``[[("urgent", {"bold": True}), " please fix"], "thanks"]``.
             author: PersonInfo instance.
             initials: Author initials (optional).
             start_run: Index of first run to anchor (default: 0). Python-style
@@ -1005,7 +1057,7 @@ class CommentManager:
         """
         # Validate everything before mutating anything.
         author_name, author_presence = self._parse_author_spec(author)
-        _validate_xml_text(text, "comment text")
+        content = self._normalize_content(text)
         _validate_xml_text(author_name, "author")
         _validate_xml_text(initials, "initials")
 
@@ -1034,10 +1086,11 @@ class CommentManager:
             comment_id=comment_id,
             para_id=para_id,
             text_id=text_id,
-            text=text,
+            content=content,
             author=author_name,
             initials=initials,
             timestamp=timestamp,
+            used_hex_ids=used_hex_ids,
         )
 
         # 2. Add anchors to document.xml
@@ -1068,7 +1121,7 @@ class CommentManager:
     def reply_to_comment(
         self,
         parent_id: Union[int, str],
-        text: str,
+        text: CommentContent,
         author: PersonInfo,
         initials: Optional[str] = None,
         person: Optional[PersonSpec] = None,
@@ -1079,7 +1132,10 @@ class CommentManager:
 
         Args:
             parent_id: Comment ID of the parent comment.
-            text: Reply text. Newlines and tabs are preserved.
+            text: Reply content. Newlines and tabs are preserved. Accepts
+                the same forms as add_comment: a plain str, or a sequence
+                of paragraphs of (text, format) runs, e.g.
+                ``[[("agreed", {"italic": True})]]``.
             author: PersonInfo instance.
             initials: Author initials (optional).
             person: Optional people.xml entry to link author identity (see
@@ -1100,7 +1156,7 @@ class CommentManager:
         """
         parent_id = _coerce_comment_id(parent_id)
         author_name, author_presence = self._parse_author_spec(author)
-        _validate_xml_text(text, "comment text")
+        content = self._normalize_content(text)
         _validate_xml_text(author_name, "author")
         _validate_xml_text(initials, "initials")
 
@@ -1166,10 +1222,11 @@ class CommentManager:
             comment_id=comment_id,
             para_id=para_id,
             text_id=text_id,
-            text=text,
+            content=content,
             author=author_name,
             initials=initials,
             timestamp=timestamp,
+            used_hex_ids=used_hex_ids,
         )
 
         # 2. Add anchors at the root comment location for Word threading compatibility.
@@ -1348,7 +1405,7 @@ class CommentManager:
     def edit_comment(
         self,
         comment_id: Union[int, str],
-        text: str,
+        text: CommentContent,
         author: Optional[str] = None,
         initials: Optional[str] = None,
         timestamp: Optional[datetime] = None,
@@ -1362,7 +1419,9 @@ class CommentManager:
 
         Args:
             comment_id: The comment to edit.
-            text: New comment text (same encoding rules as add_comment).
+            text: New comment content (same forms as add_comment): a plain
+                str, or a sequence of paragraphs of (text, format) runs,
+                e.g. ``["revised:", [("keep", {"bold": True}), " as is"]]``.
             author: Optional new author name.
             initials: Optional new initials.
             timestamp: Optional new date (naive = local time); also updates
@@ -1374,7 +1433,7 @@ class CommentManager:
                 allowed in XML, or author is empty.
         """
         comment_id = _coerce_comment_id(comment_id)
-        _validate_xml_text(text, "comment text")
+        content = self._normalize_content(text)
         if author is not None:
             if not author:
                 raise ValueError("author must be non-empty")
@@ -1410,24 +1469,27 @@ class CommentManager:
         rsid_default = uuid.uuid4().hex[:8].upper()
         rsid_rpr = uuid.uuid4().hex[:8].upper()
 
-        new_para = etree.Element(_qn(NS_W, "p"))
-        new_para.set(_qn(NS_W, "rsidR"), rsid_r)
-        new_para.set(_qn(NS_W, "rsidRDefault"), rsid_default)
-        new_para.set(_qn(NS_W14, "paraId"), primary)
-        new_para.set(_qn(NS_W14, "textId"), text_id)
-        pPr = etree.SubElement(new_para, _qn(NS_W, "pPr"))
-        pStyle = etree.SubElement(pPr, _qn(NS_W, "pStyle"))
-        pStyle.set(_qn(NS_W, "val"), "CommentText")
-        run1 = etree.SubElement(new_para, _qn(NS_W, "r"))
-        rPr = etree.SubElement(run1, _qn(NS_W, "rPr"))
-        rStyle = etree.SubElement(rPr, _qn(NS_W, "rStyle"))
-        rStyle.set(_qn(NS_W, "val"), "CommentReference")
-        etree.SubElement(run1, _qn(NS_W, "annotationRef"))
-        self._append_text_content(new_para, text, rsid_rpr)
+        new_paras = []
+        for index, runs in enumerate(content):
+            is_last = index == len(content) - 1
+            # The primary paraId (and fresh textId) stay on the LAST
+            # paragraph, where Word keys the satellite metadata.
+            new_paras.append(
+                self._build_comment_paragraph(
+                    runs,
+                    para_id=primary if is_last else self._new_long_hex_id(used_hex_ids),
+                    text_id=text_id if is_last else self._new_long_hex_id(used_hex_ids),
+                    rsid_r=rsid_r,
+                    rsid_default=rsid_default,
+                    rsid_rpr=rsid_rpr,
+                    include_annotation_ref=index == 0,
+                )
+            )
 
         for para in comment_elem.findall(_qn(NS_W, "p")):
             comment_elem.remove(para)
-        comment_elem.append(new_para)
+        for new_para in new_paras:
+            comment_elem.append(new_para)
 
         if author is not None:
             comment_elem.set(_qn(NS_W, "author"), author)
@@ -1443,8 +1505,8 @@ class CommentManager:
                     durable, _format_utc(timestamp)
                 )
 
-        # Multi-paragraph comments collapse to one paragraph; metadata for
-        # the dropped paragraphs (if any existed) is now orphaned.
+        # Only the primary paraId survives the rebuild (non-last paragraphs
+        # get fresh ids); metadata keyed to any other old paraId is orphaned.
         dropped = {pid for pid in para_ids if pid != primary}
         self._cleanup_comment_metadata(dropped)
 
@@ -1592,16 +1654,26 @@ class CommentManager:
 
     @staticmethod
     def _append_text_content(
-        para: etree._Element, text: str, rsid_rpr: str
+        para: etree._Element, text: str, rsid_rpr: str, fmt: Optional[dict] = None
     ) -> None:
         """Append the comment text as runs, preserving whitespace fidelity.
 
         Newlines become w:br and tabs w:tab (literal \\n/\\t inside w:t are
         collapsed by Word); chunks with leading/trailing whitespace get
-        xml:space="preserve" so Word does not trim them.
+        xml:space="preserve" so Word does not trim them. `fmt` may request
+        bold/italic/underline run properties.
         """
         run = etree.SubElement(para, _qn(NS_W, "r"))
         run.set(_qn(NS_W, "rsidRPr"), rsid_rpr)
+        if fmt:
+            rpr = etree.SubElement(run, _qn(NS_W, "rPr"))
+            if fmt.get("bold"):
+                etree.SubElement(rpr, _qn(NS_W, "b"))
+            if fmt.get("italic"):
+                etree.SubElement(rpr, _qn(NS_W, "i"))
+            if fmt.get("underline"):
+                u = etree.SubElement(rpr, _qn(NS_W, "u"))
+                u.set(_qn(NS_W, "val"), "single")
 
         def append_chunk(chunk: str) -> None:
             t = etree.SubElement(run, _qn(NS_W, "t"))
@@ -1627,15 +1699,52 @@ class CommentManager:
         if not emitted:
             etree.SubElement(run, _qn(NS_W, "t"))
 
+    def _build_comment_paragraph(
+        self,
+        runs: list[tuple[str, dict]],
+        para_id: str,
+        text_id: str,
+        rsid_r: str,
+        rsid_default: str,
+        rsid_rpr: str,
+        include_annotation_ref: bool,
+    ) -> etree._Element:
+        """Build one detached comment w:p element; the caller appends it."""
+        para = etree.Element(_qn(NS_W, "p"))
+        para.set(_qn(NS_W, "rsidR"), rsid_r)
+        para.set(_qn(NS_W, "rsidRDefault"), rsid_default)
+        para.set(_qn(NS_W14, "paraId"), para_id)
+        para.set(_qn(NS_W14, "textId"), text_id)
+
+        pPr = etree.SubElement(para, _qn(NS_W, "pPr"))
+        pStyle = etree.SubElement(pPr, _qn(NS_W, "pStyle"))
+        pStyle.set(_qn(NS_W, "val"), "CommentText")
+
+        # The annotationRef run marks the comment reference; Word puts it on
+        # the first paragraph only.
+        if include_annotation_ref:
+            run1 = etree.SubElement(para, _qn(NS_W, "r"))
+            rPr = etree.SubElement(run1, _qn(NS_W, "rPr"))
+            rStyle = etree.SubElement(rPr, _qn(NS_W, "rStyle"))
+            rStyle.set(_qn(NS_W, "val"), "CommentReference")
+            etree.SubElement(run1, _qn(NS_W, "annotationRef"))
+
+        if not runs:
+            self._append_text_content(para, "", rsid_rpr)
+        for run_text, fmt in runs:
+            self._append_text_content(para, run_text, rsid_rpr, fmt)
+        return para
+
     def _add_comment_xml(
         self,
         comment_id: str,
         para_id: str,
         text_id: str,
-        text: str,
+        content: list[list[tuple[str, dict]]],
         author: str,
         initials: Optional[str],
         timestamp: Optional[datetime] = None,
+        used_hex_ids: Optional[set[str]] = None,
     ) -> datetime:
         """Add a comment element to comments.xml and return its timestamp."""
         rsid_r = uuid.uuid4().hex[:8].upper()
@@ -1660,27 +1769,22 @@ class CommentManager:
             timestamp.isoformat(timespec="seconds"),
         )
 
-        # Add paragraph
-        para = etree.SubElement(comment, _qn(NS_W, "p"))
-        para.set(_qn(NS_W, "rsidR"), rsid_r)
-        para.set(_qn(NS_W, "rsidRDefault"), rsid_default)
-        para.set(_qn(NS_W14, "paraId"), para_id)
-        para.set(_qn(NS_W14, "textId"), text_id)
-
-        # Add paragraph properties with CommentText style
-        pPr = etree.SubElement(para, _qn(NS_W, "pPr"))
-        pStyle = etree.SubElement(pPr, _qn(NS_W, "pStyle"))
-        pStyle.set(_qn(NS_W, "val"), "CommentText")
-
-        # Add run with annotationRef
-        run1 = etree.SubElement(para, _qn(NS_W, "r"))
-        rPr = etree.SubElement(run1, _qn(NS_W, "rPr"))
-        rStyle = etree.SubElement(rPr, _qn(NS_W, "rStyle"))
-        rStyle.set(_qn(NS_W, "val"), "CommentReference")
-        etree.SubElement(run1, _qn(NS_W, "annotationRef"))
-
-        # Add the comment text
-        self._append_text_content(para, text, rsid_rpr)
+        if used_hex_ids is None:
+            used_hex_ids = self._used_long_hex_ids()
+        for index, runs in enumerate(content):
+            is_last = index == len(content) - 1
+            # Word keys satellite metadata to the LAST paragraph.
+            comment.append(
+                self._build_comment_paragraph(
+                    runs,
+                    para_id=para_id if is_last else self._new_long_hex_id(used_hex_ids),
+                    text_id=text_id if is_last else self._new_long_hex_id(used_hex_ids),
+                    rsid_r=rsid_r,
+                    rsid_default=rsid_default,
+                    rsid_rpr=rsid_rpr,
+                    include_annotation_ref=index == 0,
+                )
+            )
 
         # Attach and save
         self._comments_xml.append(comment)

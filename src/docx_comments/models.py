@@ -2,7 +2,16 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional, Sequence, Tuple, Union
+
+RunSpec = Union[str, Tuple[str, Dict[str, bool]]]
+"""A comment run: plain text, or (text, {"bold"/"italic"/"underline": True})."""
+
+ParagraphSpec = Union[str, Sequence[RunSpec]]
+"""A comment paragraph: plain text or a sequence of runs."""
+
+CommentContent = Union[str, Sequence[ParagraphSpec]]
+"""Comment content: a plain string (one paragraph) or paragraph sequence."""
 
 
 @dataclass
