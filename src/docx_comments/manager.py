@@ -367,9 +367,17 @@ class CommentManager:
         incompleteness — missing parts, missing paraId/textId, missing
         threading/durable/extensible entries, orphan entries, dangling
         parents — returns False and the caller runs the real migration.
+
+        Comments whose extensible entry has no dateUtc (e.g. the comment
+        carries no w:date for the migration to backfill it from) stay False
+        forever, so such documents never get the skip — matching the
+        pre-existing behavior of always running the migration.
         """
         # migrate_comment_metadata creates any missing part outright, so a
-        # missing part alone already means it would not be a no-op.
+        # missing part alone already means it would not be a no-op. (The
+        # extensible handler's _get_part may relate an existing-but-unrelated
+        # part on read; every read path, including the migration itself,
+        # already does that, so this guard changes nothing there.)
         if (
             CommentsPart(self._document)._get_part() is None
             or CommentsExtendedPart(self._document)._get_part() is None
@@ -408,8 +416,14 @@ class CommentManager:
             parent = info.get("parent_para_id")
             if parent and parent not in valid_para_ids:
                 return False  # dangling reply link
-        for pid in durable_ids:
-            if pid not in valid_para_ids:
+        # Scan raw commentId elements (not get_durable_ids, which skips
+        # entries lacking a durableId) so orphans the cleanup would remove
+        # on paraId alone are also caught here.
+        for elem in CommentsIdsPart(self._document).xml:
+            if etree.QName(elem).localname != "commentId":
+                continue
+            pid = elem.get(_qn(NS_W16CID, "paraId"))
+            if pid and pid not in valid_para_ids:
                 return False  # orphan commentId entry
         return True
 

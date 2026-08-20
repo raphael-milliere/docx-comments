@@ -331,6 +331,29 @@ class TestMigrationSkip:
         # The migration removes the orphan entry.
         assert "DEADBEEF" not in CommentsExtendedPart(doc).get_threading_info()
 
+    def test_orphan_durableless_comment_id_still_migrates(self, monkeypatch):
+        # A commentId element with a paraId but NO durableId is invisible to
+        # get_durable_ids yet removed by the migration's orphan cleanup, so
+        # the completeness check must not treat the document as complete.
+        NS_W16CID = "http://schemas.microsoft.com/office/word/2016/wordml/cid"
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"))
+        ids_part = CommentsIdsPart(doc)
+        orphan = etree.SubElement(ids_part.xml, qn(NS_W16CID, "commentId"))
+        orphan.set(qn(NS_W16CID, "paraId"), "DEADBEEF")
+        ids_part._save()
+        calls = self._spy(monkeypatch)
+        mgr.resolve_comment(cid)
+        assert calls == [1]
+        # The migration removes the orphan element.
+        assert not [
+            elem
+            for elem in CommentsIdsPart(doc).xml
+            if elem.get(qn(NS_W16CID, "paraId")) == "DEADBEEF"
+        ]
+
     def test_dangling_parent_still_migrates(self, monkeypatch):
         doc = Document()
         para = doc.add_paragraph("text")
