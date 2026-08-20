@@ -813,7 +813,9 @@ class TestSecureParsing:
     def test_external_entities_not_resolved(self, tmp_path):
         secret = tmp_path / "secret.txt"
         secret.write_text("TOPSECRET")
-        xml = (f'<!DOCTYPE r [<!ENTITY x SYSTEM "file://{secret}">]><r>&x;</r>').encode()
+        # as_uri() yields a valid file URI on every OS (file:///C:/... on
+        # Windows); hand-built "file://{path}" is rejected by libxml2 there.
+        xml = (f'<!DOCTYPE r [<!ENTITY x SYSTEM "{secret.as_uri()}">]><r>&x;</r>').encode()
         root = parse_xml_bytes(xml)
         text = (root.text or "") + "".join(c.tail or "" for c in root)
         assert "TOPSECRET" not in text
