@@ -203,9 +203,7 @@ class CommentAnchor:
         for _, part_root in self._iter_anchor_parts():
             if part_root is root:
                 return
-        raise ValueError(
-            "paragraph belongs to a detached XML tree; re-fetch it from the document"
-        )
+        raise ValueError("paragraph belongs to a detached XML tree; re-fetch it from the document")
 
     def _resolve_anchor_span(
         self,
@@ -244,8 +242,7 @@ class CommentAnchor:
 
         if not runs:
             raise IndexError(
-                "paragraph has no direct runs; omit start_run/end_run to "
-                "anchor the whole paragraph"
+                "paragraph has no direct runs; omit start_run/end_run to anchor the whole paragraph"
             )
 
         n = len(runs)
@@ -261,13 +258,9 @@ class CommentAnchor:
                 f"start_run {requested_start} out of range for paragraph with {n} run(s)"
             )
         if not 0 <= end_run < n:
-            raise IndexError(
-                f"end_run {requested_end} out of range for paragraph with {n} run(s)"
-            )
+            raise IndexError(f"end_run {requested_end} out of range for paragraph with {n} run(s)")
         if end_run < start_run:
-            raise ValueError(
-                f"end_run {requested_end} precedes start_run {requested_start}"
-            )
+            raise ValueError(f"end_run {requested_end} precedes start_run {requested_start}")
         return runs[start_run], runs[end_run]
 
     def validate_anchor_target(
@@ -342,29 +335,20 @@ class CommentAnchor:
                 pieces.append("\t" if local == "tab" else "\n")
         return "".join(pieces)
 
-    def _check_char_bounds(
-        self, para_elem: etree._Element, start_char: int, end_char: int
-    ) -> None:
+    def _check_char_bounds(self, para_elem: etree._Element, start_char: int, end_char: int) -> None:
         if not isinstance(start_char, int) or not isinstance(end_char, int):
             raise TypeError("start_char and end_char must be integers")
         if start_char < 0 or end_char < 0:
             raise IndexError("character offsets must be non-negative")
         if end_char <= start_char:
-            raise ValueError(
-                f"end_char {end_char} must be greater than start_char {start_char}"
-            )
-        total = sum(
-            length for _, _, length, _ in self._iter_paragraph_atoms(para_elem)
-        )
+            raise ValueError(f"end_char {end_char} must be greater than start_char {start_char}")
+        total = sum(length for _, _, length, _ in self._iter_paragraph_atoms(para_elem))
         if end_char > total:
             raise IndexError(
-                f"end_char {end_char} out of range for paragraph with "
-                f"{total} character(s)"
+                f"end_char {end_char} out of range for paragraph with {total} character(s)"
             )
 
-    def validate_char_span(
-        self, paragraph: Paragraph, start_char: int, end_char: int
-    ) -> None:
+    def validate_char_span(self, paragraph: Paragraph, start_char: int, end_char: int) -> None:
         """Validate a character span without mutating anything."""
         self._validate_owned(paragraph)
         self._check_char_bounds(paragraph._element, start_char, end_char)
@@ -475,8 +459,7 @@ class CommentAnchor:
                 if child.tag == _REF_TAG and child.get(_ID_ATTR) in comment_ids
             ]
             if matching and all(
-                child in matching or etree.QName(child).localname == "rPr"
-                for child in endpoint
+                child in matching or etree.QName(child).localname == "rPr" for child in endpoint
             ):
                 raise ValueError(
                     "start_run/end_run address a comment reference run "
@@ -618,8 +601,7 @@ class CommentAnchor:
         ref_run_parent = parent_ref.getparent()
         target = (
             ref_run_parent
-            if ref_run_parent is not None
-            and etree.QName(ref_run_parent).localname == "r"
+            if ref_run_parent is not None and etree.QName(ref_run_parent).localname == "r"
             else parent_ref
         )
         new_start = etree.Element(_START_TAG)
@@ -645,15 +627,11 @@ class CommentAnchor:
             new_comment_id: ID of the new comment.
         """
         # Find the parent comment's anchors
-        part, parent_start, parent_end, parent_ref = self._find_anchor_elements(
-            parent_comment_id
-        )
+        part, parent_start, parent_end, parent_ref = self._find_anchor_elements(parent_comment_id)
 
         if parent_start is None or parent_end is None:
             if parent_ref is None:
-                raise ValueError(
-                    f"Could not find anchors for comment {parent_comment_id}"
-                )
+                raise ValueError(f"Could not find anchors for comment {parent_comment_id}")
             # Reference-only anchor (range markers are optional per ECMA-376
             # §17.13.4): synthesize a range around the parent's reference run
             # for the new comment, mirroring what Word produces on re-save.
@@ -697,10 +675,7 @@ class CommentAnchor:
         anchor_after: Optional[etree._Element] = None
         if parent_ref is not None:
             parent_ref_run = parent_ref.getparent()
-            if (
-                parent_ref_run is not None
-                and etree.QName(parent_ref_run).localname == "r"
-            ):
+            if parent_ref_run is not None and etree.QName(parent_ref_run).localname == "r":
                 anchor_after = parent_ref_run
         if anchor_after is None and self._has_paragraph_ancestor(new_end):
             anchor_after = new_end
@@ -845,8 +820,7 @@ class CommentAnchor:
                     ref_run is not None
                     and etree.QName(ref_run).localname == "r"
                     and all(
-                        child is ref or etree.QName(child).localname == "rPr"
-                        for child in ref_run
+                        child is ref or etree.QName(child).localname == "rPr" for child in ref_run
                     )
                 ):
                     ref_run.getparent().remove(ref_run)

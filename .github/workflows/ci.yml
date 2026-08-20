@@ -7,12 +7,60 @@ on:
     branches: [main, master]
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: |
+          uv venv
+          uv pip install -e ".[dev]"
+
+      - name: Ruff lint
+        run: |
+          source .venv/bin/activate
+          ruff check src/ tests/
+
+      - name: Ruff format check
+        run: |
+          source .venv/bin/activate
+          ruff format --check src/ tests/
+
+      - name: Type check
+        run: |
+          source .venv/bin/activate
+          mypy src/docx_comments
+
+  test:
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest]
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          # system_author.py has real macOS/Windows code paths; run the
+          # suite where they actually execute (oldest supported + newest).
+          - os: macos-latest
+            python-version: "3.11"
+          - os: macos-latest
+            python-version: "3.14"
+          - os: windows-latest
+            python-version: "3.9"
+          - os: windows-latest
+            python-version: "3.14"
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - uses: actions/checkout@v4
@@ -30,27 +78,10 @@ jobs:
           uv venv
           uv pip install -e ".[dev]"
 
-      - name: Run linting
-        run: |
-          source .venv/bin/activate
-          ruff check src/ tests/
-
-      - name: Run type checking
-        run: |
-          source .venv/bin/activate
-          mypy src/docx_comments
-
       - name: Run tests
         run: |
-          source .venv/bin/activate
+          source .venv/bin/activate 2>/dev/null || source .venv/Scripts/activate
           pytest --cov=docx_comments --cov-report=xml --cov-fail-under=80
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        if: matrix.python-version == '3.12'
-        with:
-          files: ./coverage.xml
-          fail_ci_if_error: false
 
   # Exercise the declared dependency floor (python-docx>=1.0.0) so a commit
   # cannot silently start requiring a newer python-docx API.
@@ -79,12 +110,16 @@ jobs:
 
   ci-passed:
     name: CI Passed
-    needs: [test, test-dependency-floor]
+    needs: [lint, test, test-dependency-floor]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs passed
         run: |
+          if [ "${{ needs.lint.result }}" != "success" ]; then
+            echo "Lint job failed"
+            exit 1
+          fi
           if [ "${{ needs.test.result }}" != "success" ]; then
             echo "Test job failed"
             exit 1

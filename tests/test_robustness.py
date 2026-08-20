@@ -22,9 +22,7 @@ NS_W15 = "http://schemas.microsoft.com/office/word/2012/wordml"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
 NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 
-CT_FOOTNOTES = (
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"
-)
+CT_FOOTNOTES = "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"
 
 HAS_NATIVE_COMMENTS = hasattr(Document(), "add_comment")
 
@@ -255,9 +253,7 @@ class TestAnchorValidation:
         for word in ("one ", "two ", "three"):
             para.add_run(word)
         mgr = CommentManager(doc)
-        comment_id = mgr.add_comment(
-            para, "c", author_obj("A"), start_run=-1, end_run=-1
-        )
+        comment_id = mgr.add_comment(para, "c", author_obj("A"), start_run=-1, end_run=-1)
 
         children = list(para._element)
         localnames = [etree.QName(c).localname for c in children]
@@ -352,9 +348,7 @@ class TestMixedContentAnchors:
         start_idx = next(
             i for i, c in enumerate(children) if c.tag == qn(NS_W, "commentRangeStart")
         )
-        end_idx = next(
-            i for i, c in enumerate(children) if c.tag == qn(NS_W, "commentRangeEnd")
-        )
+        end_idx = next(i for i, c in enumerate(children) if c.tag == qn(NS_W, "commentRangeEnd"))
         run_idx = next(
             i
             for i, c in enumerate(children)
@@ -372,12 +366,10 @@ class TestMixedContentAnchors:
         mgr.add_comment(para, "c", PersonInfo(author="A"), start_run=0, end_run=0)
         children = list(para._element)
         end_idx = next(
-            i for i, c in enumerate(children)
-            if etree.QName(c).localname == "commentRangeEnd"
+            i for i, c in enumerate(children) if etree.QName(c).localname == "commentRangeEnd"
         )
         hyper_idx = next(
-            i for i, c in enumerate(children)
-            if etree.QName(c).localname == "hyperlink"
+            i for i, c in enumerate(children) if etree.QName(c).localname == "hyperlink"
         )
         assert end_idx < hyper_idx, "explicit run indices must not span containers"
 
@@ -524,8 +516,7 @@ class TestFootnoteAnchors:
         with ZipFile(str(path)) as zf:
             footnotes = etree.fromstring(zf.read("word/footnotes.xml"))
         anchored_ids = {
-            e.get(qn(NS_W, "id"))
-            for e in footnotes.iter(qn(NS_W, "commentRangeStart"))
+            e.get(qn(NS_W, "id")) for e in footnotes.iter(qn(NS_W, "commentRangeStart"))
         }
         assert anchored_ids == {root_id, reply_id}
 
@@ -713,10 +704,7 @@ class TestOrphanHandling:
 
         # Simulate another tool deleting the root comment element only.
         for elem in list(mgr._comments_xml):
-            if (
-                etree.QName(elem).localname == "comment"
-                and elem.get(qn(NS_W, "id")) == root_id
-            ):
+            if etree.QName(elem).localname == "comment" and elem.get(qn(NS_W, "id")) == root_id:
                 mgr._comments_xml.remove(elem)
         mgr._save_comments()
 
@@ -825,9 +813,7 @@ class TestSecureParsing:
     def test_external_entities_not_resolved(self, tmp_path):
         secret = tmp_path / "secret.txt"
         secret.write_text("TOPSECRET")
-        xml = (
-            f'<!DOCTYPE r [<!ENTITY x SYSTEM "file://{secret}">]><r>&x;</r>'
-        ).encode()
+        xml = (f'<!DOCTYPE r [<!ENTITY x SYSTEM "file://{secret}">]><r>&x;</r>').encode()
         root = parse_xml_bytes(xml)
         text = (root.text or "") + "".join(c.tail or "" for c in root)
         assert "TOPSECRET" not in text
@@ -864,9 +850,7 @@ class TestMigrateNoGraft:
 
         # Orphan metadata left behind by another tool's delete: a resolved
         # entry with a durable id, but no matching comment element.
-        CommentsExtendedPart(doc).add_comment_ex(
-            para_id="DEADBEEF", parent_para_id=None, done=True
-        )
+        CommentsExtendedPart(doc).add_comment_ex(para_id="DEADBEEF", parent_para_id=None, done=True)
         CommentsIdsPart(doc).add_comment_id(para_id="DEADBEEF", durable_id="FEEDFACE")
 
         # An unrelated comment added without w14:paraId (e.g. by a tool that
@@ -928,11 +912,7 @@ class TestMoveIndexStability:
         start_idx = names.index("commentRangeStart")
         end_idx = names.index("commentRangeEnd")
         spanned = children[start_idx + 1 : end_idx]
-        texts = [
-            t.text
-            for el in spanned
-            for t in el.iter(qn(NS_W, "t"))
-        ]
+        texts = [t.text for el in spanned for t in el.iter(qn(NS_W, "t"))]
         assert texts == ["two"]
 
     def test_move_onto_own_reference_run_raises_before_mutation(self):
@@ -1013,9 +993,7 @@ class TestMoveIndexStability:
 
         from docx.text.paragraph import Paragraph
 
-        detached = etree.fromstring(
-            f'<w:p xmlns:w="{NS_W}"><w:r><w:t>ghost</w:t></w:r></w:p>'
-        )
+        detached = etree.fromstring(f'<w:p xmlns:w="{NS_W}"><w:r><w:t>ghost</w:t></w:r></w:p>')
         ghost_para = Paragraph(detached, doc)
         with pytest.raises(ValueError, match="detached"):
             mgr.add_comment(ghost_para, "c", author_obj("A"))
@@ -1038,10 +1016,7 @@ class TestFootnoteAnchorWrites:
         _, path = saved_zip_names(doc, tmp_path, "footnote_move.docx")
         with ZipFile(str(path)) as zf:
             footnotes = etree.fromstring(zf.read("word/footnotes.xml"))
-        anchored = {
-            e.get(qn(NS_W, "id"))
-            for e in footnotes.iter(qn(NS_W, "commentRangeStart"))
-        }
+        anchored = {e.get(qn(NS_W, "id")) for e in footnotes.iter(qn(NS_W, "commentRangeStart"))}
         assert standalone_id in anchored
 
 
@@ -1166,9 +1141,7 @@ class TestIdPoolCoversAllStories:
         doc = Document()
         header_para = doc.sections[0].header.paragraphs[0]
         header_para.add_run("Header text")
-        stray = etree.SubElement(
-            header_para._element.getparent(), qn(NS_W, "commentRangeStart")
-        )
+        stray = etree.SubElement(header_para._element.getparent(), qn(NS_W, "commentRangeStart"))
         stray.set(qn(NS_W, "id"), "777")
 
         seq = iter(["777", "778"])
@@ -1335,9 +1308,7 @@ class TestMixedReferenceRuns:
         start_idx = names.index("commentRangeStart")
         end_idx = names.index("commentRangeEnd")
         spanned_text = [
-            t.text
-            for el in children[start_idx + 1 : end_idx]
-            for t in el.iter(qn(NS_W, "t"))
+            t.text for el in children[start_idx + 1 : end_idx] for t in el.iter(qn(NS_W, "t"))
         ]
         assert spanned_text == ["beta"]
 
@@ -1347,8 +1318,16 @@ class TestDoneLexicalForms:
 
     @pytest.mark.parametrize(
         "raw,expected",
-        [("1", True), ("true", True), ("on", True), ("0", False),
-         ("false", False), ("off", False), ("garbage", False), (" TRUE ", True)],
+        [
+            ("1", True),
+            ("true", True),
+            ("on", True),
+            ("0", False),
+            ("false", False),
+            ("off", False),
+            ("garbage", False),
+            (" TRUE ", True),
+        ],
     )
     def test_st_onoff_values(self, raw, expected):
         doc = Document()
@@ -1467,7 +1446,8 @@ class TestBlockLevelAnchors:
         assert len(threads) == 1 and threads[0].reply_count == 1
         # Range markers were synthesized for the reply.
         starts = [
-            e for e in doc2.element.body.iter(qn(NS_W, "commentRangeStart"))
+            e
+            for e in doc2.element.body.iter(qn(NS_W, "commentRangeStart"))
             if e.get(qn(NS_W, "id")) == rid
         ]
         assert len(starts) == 1
@@ -1508,10 +1488,7 @@ class TestBlockLevelAnchors:
         )
         # Reference run landed inside the last cell's last paragraph.
         last_cell_para = table.cell(0, 1).paragraphs[-1]
-        assert (
-            last_cell_para._element.find(f".//{qn(NS_W, 'commentReference')}")
-            is not None
-        )
+        assert last_cell_para._element.find(f".//{qn(NS_W, 'commentReference')}") is not None
 
 
 class TestParentChainCycle:

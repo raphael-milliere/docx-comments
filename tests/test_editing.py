@@ -116,9 +116,7 @@ class TestCommentEditing:
         )
 
         root_para_id = next(
-            comment.para_id
-            for comment in mgr.list_comments()
-            if comment.comment_id == root_id
+            comment.para_id for comment in mgr.list_comments() if comment.comment_id == root_id
         )
 
         ns_w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"

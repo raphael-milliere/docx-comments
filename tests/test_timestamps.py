@@ -72,9 +72,7 @@ class TestTimestampParameter:
         t1 = datetime(2020, 1, 1, tzinfo=timezone.utc)
         t2 = datetime(2020, 1, 2, tzinfo=timezone.utc)
         r_late = mgr.reply_to_comment(cid, "late", PersonInfo(author="B"), timestamp=t2)
-        r_early = mgr.reply_to_comment(
-            cid, "early", PersonInfo(author="B"), timestamp=t1
-        )
+        r_early = mgr.reply_to_comment(cid, "early", PersonInfo(author="B"), timestamp=t1)
         thread = mgr.get_comment_threads()[0]
         assert [r.comment_id for r in thread.replies] == [r_early, r_late]
 

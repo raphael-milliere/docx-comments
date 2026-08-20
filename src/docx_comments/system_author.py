@@ -99,9 +99,7 @@ def _person_from_docx(
         return None, None
 
 
-def _docx_single_person(
-    zf: ZipFile, names: set[str], include_presence: bool
-) -> PersonInfo:
+def _docx_single_person(zf: ZipFile, names: set[str], include_presence: bool) -> PersonInfo:
     if "word/people.xml" not in names:
         raise _DocxAuthorAmbiguous("DOCX author source has no people.xml")
     try:
@@ -111,9 +109,7 @@ def _docx_single_person(
 
     people = [elem for elem in xml if etree.QName(elem).localname == "person"]
     if len(people) != 1:
-        raise _DocxAuthorAmbiguous(
-            f"DOCX author source has {len(people)} people entries"
-        )
+        raise _DocxAuthorAmbiguous(f"DOCX author source has {len(people)} people entries")
 
     elem = people[0]
     author = _attr_by_localname(elem, "author") or ""
@@ -142,9 +138,7 @@ def _attr_by_localname(elem: etree._Element, localname: str) -> Optional[str]:
     return None
 
 
-def _find_child_by_localname(
-    elem: etree._Element, localname: str
-) -> Optional[etree._Element]:
+def _find_child_by_localname(elem: etree._Element, localname: str) -> Optional[etree._Element]:
     for child in elem:
         if etree.QName(child).localname == localname:
             return child

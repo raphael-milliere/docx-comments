@@ -27,38 +27,28 @@ def _write_plist(tmp_path, data):
 class TestMacosPlist:
     def test_reads_name_and_initials(self, tmp_path, monkeypatch):
         _write_plist(tmp_path, {"Name": "Jane Doe", "Initials": "JD"})
-        monkeypatch.setattr(
-            system_author.Path, "home", classmethod(lambda cls: tmp_path)
-        )
+        monkeypatch.setattr(system_author.Path, "home", classmethod(lambda cls: tmp_path))
         assert _macos_office_user_info() == ("Jane Doe", "JD")
 
     def test_wrong_types_become_none(self, tmp_path, monkeypatch):
         _write_plist(tmp_path, {"Name": 42, "Initials": ["J"]})
-        monkeypatch.setattr(
-            system_author.Path, "home", classmethod(lambda cls: tmp_path)
-        )
+        monkeypatch.setattr(system_author.Path, "home", classmethod(lambda cls: tmp_path))
         assert _macos_office_user_info() == (None, None)
 
     def test_missing_file(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(
-            system_author.Path, "home", classmethod(lambda cls: tmp_path)
-        )
+        monkeypatch.setattr(system_author.Path, "home", classmethod(lambda cls: tmp_path))
         assert _macos_office_user_info() == (None, None)
 
     def test_corrupt_plist_returns_none(self, tmp_path, monkeypatch):
         office_dir = tmp_path / "Library/Group Containers/UBF8T346G9.Office"
         office_dir.mkdir(parents=True)
         (office_dir / "MeContact.plist").write_bytes(b"not a plist")
-        monkeypatch.setattr(
-            system_author.Path, "home", classmethod(lambda cls: tmp_path)
-        )
+        monkeypatch.setattr(system_author.Path, "home", classmethod(lambda cls: tmp_path))
         assert _macos_office_user_info() == (None, None)
 
     def test_non_dict_plist_returns_none(self, tmp_path, monkeypatch):
         _write_plist(tmp_path, ["not", "a", "dict"])
-        monkeypatch.setattr(
-            system_author.Path, "home", classmethod(lambda cls: tmp_path)
-        )
+        monkeypatch.setattr(system_author.Path, "home", classmethod(lambda cls: tmp_path))
         assert _macos_office_user_info() == (None, None)
 
 
@@ -72,21 +62,15 @@ class TestPlatformDispatch:
 
     def test_darwin_dispatches_to_macos_reader(self, tmp_path, monkeypatch):
         monkeypatch.setattr(system_author.sys, "platform", "darwin")
-        monkeypatch.setattr(
-            system_author.Path, "home", classmethod(lambda cls: tmp_path)
-        )
+        monkeypatch.setattr(system_author.Path, "home", classmethod(lambda cls: tmp_path))
         assert _system_office_user_info() == (None, None)
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="reads the real registry on Windows"
-    )
+    @pytest.mark.skipif(sys.platform == "win32", reason="reads the real registry on Windows")
     def test_windows_reader_degrades_without_winreg(self, monkeypatch):
         monkeypatch.setattr(system_author.sys, "platform", "win32")
         assert _system_office_user_info() == (None, None)
 
-    @pytest.mark.skipif(
-        sys.platform == "win32", reason="exercises the non-Windows early return"
-    )
+    @pytest.mark.skipif(sys.platform == "win32", reason="exercises the non-Windows early return")
     def test_windows_reader_early_return_off_windows(self):
         assert _windows_office_user_info() == (None, None)
 
@@ -128,7 +112,7 @@ class TestPersonFromDocx:
     def test_person_without_author_name_warns_and_falls_back(self, tmp_path):
         nameless = tmp_path / "nameless.docx"
         people = (
-            b'<w15:people xmlns:w15='
+            b"<w15:people xmlns:w15="
             b'"http://schemas.microsoft.com/office/word/2012/wordml">'
             b"<w15:person/></w15:people>"
         )
@@ -138,9 +122,7 @@ class TestPersonFromDocx:
         assert person is None
 
     def test_include_presence_without_presence_info(self, tmp_path):
-        person, _ = _person_from_docx(
-            str(_author_docx(tmp_path)), include_presence=True
-        )
+        person, _ = _person_from_docx(str(_author_docx(tmp_path)), include_presence=True)
         assert person is not None and person.author == "Env Author"
         assert person.provider_id is None and person.user_id is None
 
@@ -163,9 +145,7 @@ class TestEnvVarSource:
 
 class TestSystemInfoFallback:
     def test_system_office_info_used(self, monkeypatch):
-        monkeypatch.setattr(
-            system_author, "_system_office_user_info", lambda: ("Sys User", "SU")
-        )
+        monkeypatch.setattr(system_author, "_system_office_user_info", lambda: ("Sys User", "SU"))
         person, initials = _default_person_from_system()
         assert person is not None and person.author == "Sys User"
         assert initials == "SU"

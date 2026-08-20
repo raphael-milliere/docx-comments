@@ -33,12 +33,8 @@ NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 
 # Relationship types
 REL_COMMENTS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
-REL_COMMENTS_EXT = (
-    "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
-)
-REL_COMMENTS_IDS = (
-    "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds"
-)
+REL_COMMENTS_EXT = "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
+REL_COMMENTS_IDS = "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds"
 REL_PEOPLE = "http://schemas.microsoft.com/office/2011/relationships/people"
 REL_COMMENTS_EXTENSIBLE = (
     "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible"
@@ -49,9 +45,7 @@ CT_COMMENTS = "application/vnd.openxmlformats-officedocument.wordprocessingml.co
 CT_COMMENTS_EXT = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"
 )
-CT_COMMENTS_IDS = (
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml"
-)
+CT_COMMENTS_IDS = "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml"
 CT_PEOPLE = "application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml"
 CT_COMMENTS_EXTENSIBLE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml"
@@ -89,9 +83,7 @@ def validate_xml_text(value: Optional[str], what: str) -> None:
     try:
         probe.text = value
     except ValueError as exc:
-        raise ValueError(
-            f"{what} contains characters not allowed in XML: {exc}"
-        ) from exc
+        raise ValueError(f"{what} contains characters not allowed in XML: {exc}") from exc
 
 
 def part_is_blob_backed(part: Any) -> bool:
@@ -256,8 +248,7 @@ class _BasePartHandler:
         elem = part_element(part)
         if elem is None:
             raise ValueError(
-                f"cannot read {self._partname}: the part exists but its XML "
-                "cannot be parsed"
+                f"cannot read {self._partname}: the part exists but its XML cannot be parsed"
             )
         return elem
 
@@ -687,9 +678,7 @@ class PeoplePart(_BasePartHandler):
         return None
 
     @staticmethod
-    def _find_child_by_localname(
-        elem: etree._Element, localname: str
-    ) -> Optional[etree._Element]:
+    def _find_child_by_localname(elem: etree._Element, localname: str) -> Optional[etree._Element]:
         for child in elem:
             if etree.QName(child).localname == localname:
                 return child
@@ -741,9 +730,7 @@ class PeoplePart(_BasePartHandler):
             raise ValueError("presence must include provider_id and user_id")
         return provider_id, user_id
 
-    def ensure_person(
-        self, author: str, presence: Optional[dict[str, str]] = None
-    ) -> PersonInfo:
+    def ensure_person(self, author: str, presence: Optional[dict[str, str]] = None) -> PersonInfo:
         """Ensure a person entry exists, optionally adding presence metadata."""
         if not author:
             raise ValueError("author must be non-empty")
@@ -779,9 +766,7 @@ class PeoplePart(_BasePartHandler):
         self._save()
         return self._person_info_from_elem(person_elem)
 
-    def merge_from(
-        self, source: "PeoplePart", include_presence: bool = False
-    ) -> list[PersonInfo]:
+    def merge_from(self, source: "PeoplePart", include_presence: bool = False) -> list[PersonInfo]:
         """
         Merge people entries from another document.
 

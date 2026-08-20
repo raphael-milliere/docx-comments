@@ -192,9 +192,7 @@ class TestWordOnlineCompatibility:
             xml = etree.fromstring(zf.read("word/document.xml"))
 
         ns_w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-        range_start = xml.find(
-            f".//{{{ns_w}}}commentRangeStart[@{{{ns_w}}}id='{root_id}']"
-        )
+        range_start = xml.find(f".//{{{ns_w}}}commentRangeStart[@{{{ns_w}}}id='{root_id}']")
         assert range_start is not None
 
         para_elem = range_start.getparent()
@@ -288,9 +286,7 @@ def test_extensible_linked_by_durable_id_with_utc_date(tmp_path):
         cex_root = etree.fromstring(zf.read("word/commentsExtensible.xml"))
         comments_root = etree.fromstring(zf.read("word/comments.xml"))
     durable_ids = {
-        e.get(f"{{{ns_cid}}}durableId")
-        for e in ids_root
-        if etree.QName(e).localname == "commentId"
+        e.get(f"{{{ns_cid}}}durableId") for e in ids_root if etree.QName(e).localname == "commentId"
     }
     cex_entries = {
         e.get(f"{{{ns_cex}}}durableId"): e.get(f"{{{ns_cex}}}dateUtc")

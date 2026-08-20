@@ -25,9 +25,7 @@ def _setup(text="The quick brown fox"):
 class TestCharSpan:
     def test_mid_run_anchor(self):
         doc, para, mgr = _setup()
-        cid = mgr.add_comment(
-            para, "c", PersonInfo(author="A"), start_char=4, end_char=9
-        )
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"), start_char=4, end_char=9)
         assert mgr.get_anchored_text(cid) == "quick"
         assert para.text == "The quick brown fox"
 
@@ -45,9 +43,7 @@ class TestCharSpan:
         para.add_run("one ")
         para.add_run("two")
         mgr = CommentManager(doc)
-        cid = mgr.add_comment(
-            para, "c", PersonInfo(author="A"), start_char=4, end_char=7
-        )
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"), start_char=4, end_char=7)
         assert mgr.get_anchored_text(cid) == "two"
         assert len(para._element.findall(qn(NS_W, "r"))) == 3  # 2 text + 1 ref
 
@@ -57,9 +53,7 @@ class TestCharSpan:
         run = para.add_run("boldtext")
         run.bold = True
         mgr = CommentManager(doc)
-        cid = mgr.add_comment(
-            para, "c", PersonInfo(author="A"), start_char=4, end_char=8
-        )
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"), start_char=4, end_char=8)
         assert mgr.get_anchored_text(cid) == "text"
         for r in para._element.findall(qn(NS_W, "r")):
             t = r.find(qn(NS_W, "t"))
@@ -80,9 +74,7 @@ class TestCharSpan:
         t = etree.SubElement(run, qn(NS_W, "t"))
         t.text = "the linked words"
         mgr = CommentManager(doc)
-        cid = mgr.add_comment(
-            para, "c", PersonInfo(author="A"), start_char=8, end_char=14
-        )
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"), start_char=8, end_char=14)
         assert mgr.get_anchored_text(cid) == "linked"
 
     def test_br_counts_one_char(self):
@@ -92,28 +84,27 @@ class TestCharSpan:
         etree.SubElement(run._element, qn(NS_W, "br"))
         para.add_run("cd")
         mgr = CommentManager(doc)
-        cid = mgr.add_comment(
-            para, "c", PersonInfo(author="A"), start_char=3, end_char=5
-        )
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"), start_char=3, end_char=5)
         assert mgr.get_anchored_text(cid) == "cd"
 
     def test_validation_errors(self):
         doc, para, mgr = _setup()
         with pytest.raises(ValueError, match="not both"):
             mgr.add_comment(
-                para, "c", PersonInfo(author="A"),
-                start_run=0, end_run=0, start_char=0, end_char=3,
+                para,
+                "c",
+                PersonInfo(author="A"),
+                start_run=0,
+                end_run=0,
+                start_char=0,
+                end_char=3,
             )
         with pytest.raises(ValueError, match="together"):
             mgr.add_comment(para, "c", PersonInfo(author="A"), start_char=1)
         with pytest.raises(IndexError):
-            mgr.add_comment(
-                para, "c", PersonInfo(author="A"), start_char=0, end_char=999
-            )
+            mgr.add_comment(para, "c", PersonInfo(author="A"), start_char=0, end_char=999)
         with pytest.raises(ValueError):
-            mgr.add_comment(
-                para, "c", PersonInfo(author="A"), start_char=5, end_char=5
-            )
+            mgr.add_comment(para, "c", PersonInfo(author="A"), start_char=5, end_char=5)
         # No mutation on failure: no runs were split.
         assert len(para._element.findall(qn(NS_W, "r"))) == 1
 
@@ -126,9 +117,7 @@ class TestAddCommentOnText:
 
     def test_occurrence(self):
         doc, para, mgr = _setup("aba aba aba")
-        cid = mgr.add_comment_on_text(
-            para, "aba", "c", PersonInfo(author="A"), occurrence=2
-        )
+        cid = mgr.add_comment_on_text(para, "aba", "c", PersonInfo(author="A"), occurrence=2)
         assert mgr.get_anchored_text(cid) == "aba"
         # Splitting must not change the visible text.
         anchor = CommentAnchor(doc)
@@ -150,9 +139,7 @@ class TestAddCommentOnText:
 
     def test_regex(self):
         doc, para, mgr = _setup()
-        cid = mgr.add_comment_on_text(
-            para, re.compile(r"qu\w+"), "c", PersonInfo(author="A")
-        )
+        cid = mgr.add_comment_on_text(para, re.compile(r"qu\w+"), "c", PersonInfo(author="A"))
         assert mgr.get_anchored_text(cid) == "quick"
 
     def test_missing_match_raises_with_count(self):
@@ -160,6 +147,4 @@ class TestAddCommentOnText:
         with pytest.raises(ValueError, match="0 time"):
             mgr.add_comment_on_text(para, "zebra", "c", PersonInfo(author="A"))
         with pytest.raises(ValueError, match="1 time"):
-            mgr.add_comment_on_text(
-                para, "quick", "c", PersonInfo(author="A"), occurrence=2
-            )
+            mgr.add_comment_on_text(para, "quick", "c", PersonInfo(author="A"), occurrence=2)

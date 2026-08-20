@@ -101,9 +101,7 @@ def _coerce_comment_id(comment_id: Union[int, str]) -> str:
     if isinstance(comment_id, int):
         return str(comment_id)
     if not isinstance(comment_id, str):
-        raise TypeError(
-            f"comment_id must be a str or int, got {type(comment_id).__name__}"
-        )
+        raise TypeError(f"comment_id must be a str or int, got {type(comment_id).__name__}")
     return comment_id
 
 
@@ -230,8 +228,7 @@ class CommentManager:
                 if value:
                     used.add(value.upper())
         used.update(
-            pid.upper()
-            for pid in CommentsExtendedPart(self._document).get_threading_info()
+            pid.upper() for pid in CommentsExtendedPart(self._document).get_threading_info()
         )
         for para_id, durable_id in CommentsIdsPart(self._document).get_durable_ids().items():
             used.add(para_id.upper())
@@ -279,9 +276,7 @@ class CommentManager:
         by_para_id = {c.para_id: c for c in comments if c.para_id}
         return comments, by_id, by_para_id
 
-    def _root_for(
-        self, comment: CommentInfo, by_para_id: dict[str, CommentInfo]
-    ) -> CommentInfo:
+    def _root_for(self, comment: CommentInfo, by_para_id: dict[str, CommentInfo]) -> CommentInfo:
         current = comment
         seen: set[str] = set()
         while current.parent_para_id and current.parent_para_id in by_para_id:
@@ -515,9 +510,7 @@ class CommentManager:
                 primary_para_id = para_ids[-1]
 
             if primary_para_id not in threading:
-                ext_part.add_comment_ex(
-                    para_id=primary_para_id, parent_para_id=None, done=False
-                )
+                ext_part.add_comment_ex(para_id=primary_para_id, parent_para_id=None, done=False)
                 threading[primary_para_id] = {
                     "parent_para_id": None,
                     "done": False,
@@ -533,8 +526,7 @@ class CommentManager:
             durable_id = durable_ids.get(primary_para_id)
             ext_entry = extensible_info.get(durable_id) if durable_id else None
             if durable_id and (
-                durable_id not in extensible_info
-                or not (ext_entry or {}).get("date_utc")
+                durable_id not in extensible_info or not (ext_entry or {}).get("date_utc")
             ):
                 date_str = comment_elem.get(_qn(NS_W, "date"))
                 timestamp = _parse_comment_date(date_str)
@@ -674,9 +666,7 @@ class CommentManager:
         for info in comments_data:
             # "" when no paraId is identifiable (never a key in the satellite
             # parts, so the lookups below fall through to their defaults).
-            para_id = (
-                self._primary_para_id(info["para_ids"], threading, durable_ids) or ""
-            )
+            para_id = self._primary_para_id(info["para_ids"], threading, durable_ids) or ""
 
             thread_info = threading.get(para_id, {})
             parent_para_id = thread_info.get("parent_para_id")
@@ -753,9 +743,7 @@ class CommentManager:
                 return thread
         raise CommentNotFoundError(f"Comment {comment_id} not found")
 
-    def get_comment_paragraph(
-        self, comment_id: Union[int, str]
-    ) -> Optional[Paragraph]:
+    def get_comment_paragraph(self, comment_id: Union[int, str]) -> Optional[Paragraph]:
         """Paragraph containing the comment's anchor.
 
         Returns None when the comment exists but has no range anchors.
@@ -852,9 +840,7 @@ class CommentManager:
         people_part = PeoplePart(self._document)
         return people_part.get_person(author)
 
-    def ensure_person(
-        self, author: str, presence: Optional[dict[str, str]] = None
-    ) -> PersonInfo:
+    def ensure_person(self, author: str, presence: Optional[dict[str, str]] = None) -> PersonInfo:
         """
         Ensure a people.xml entry exists for an author.
 
@@ -893,9 +879,7 @@ class CommentManager:
 
     _ALLOWED_RUN_FORMATS = frozenset({"bold", "italic", "underline"})
 
-    def _normalize_content(
-        self, content: CommentContent
-    ) -> list[list[tuple[str, dict]]]:
+    def _normalize_content(self, content: CommentContent) -> list[list[tuple[str, dict]]]:
         """Normalize comment content to paragraphs of (text, format) runs.
 
         Validates types, format keys, and XML-legality up front so callers
@@ -918,14 +902,10 @@ class CommentManager:
                 else:
                     run_text, fmt = run_spec
                     if not isinstance(run_text, str) or not isinstance(fmt, dict):
-                        raise TypeError(
-                            "run specs must be str or (str, dict) tuples"
-                        )
+                        raise TypeError("run specs must be str or (str, dict) tuples")
                     unknown = set(fmt) - self._ALLOWED_RUN_FORMATS
                     if unknown:
-                        raise ValueError(
-                            f"unsupported run formatting keys: {sorted(unknown)}"
-                        )
+                        raise ValueError(f"unsupported run formatting keys: {sorted(unknown)}")
                     fmt = dict(fmt)
                 _validate_xml_text(run_text, "comment text")
                 runs.append((run_text, fmt))
@@ -1076,9 +1056,7 @@ class CommentManager:
 
         return (person_author, presence)
 
-    def _apply_person_spec(
-        self, plan: Optional[tuple[str, Optional[dict[str, str]]]]
-    ) -> None:
+    def _apply_person_spec(self, plan: Optional[tuple[str, Optional[dict[str, str]]]]) -> None:
         if plan is not None:
             self.ensure_person(plan[0], plan[1])
 
@@ -1156,9 +1134,7 @@ class CommentManager:
             if start_char is None or end_char is None:
                 raise ValueError("start_char and end_char must be provided together")
             if start_run != 0 or end_run is not None:
-                raise ValueError(
-                    "pass either start_run/end_run or start_char/end_char, not both"
-                )
+                raise ValueError("pass either start_run/end_run or start_char/end_char, not both")
             anchor.validate_char_span(paragraph, start_char, end_char)
         else:
             anchor.validate_anchor_target(paragraph, start_run, end_run)
@@ -1194,9 +1170,7 @@ class CommentManager:
 
         # 2. Add anchors to document.xml
         if start_char is not None and end_char is not None:
-            anchor.add_anchors_at_char_span(
-                paragraph, start_char, end_char, comment_id
-            )
+            anchor.add_anchors_at_char_span(paragraph, start_char, end_char, comment_id)
         else:
             anchor.add_anchors(
                 paragraph=paragraph,
@@ -1372,9 +1346,7 @@ class CommentManager:
         # Validate the anchor location before writing the reply so a failure
         # cannot leave an anchor-less comment behind. A reference run alone is
         # a legal anchor (range markers are optional per ECMA-376 §17.13.4).
-        _, parent_start, parent_end, parent_ref = anchor._find_anchor_elements(
-            anchor_parent_id
-        )
+        _, parent_start, parent_end, parent_ref = anchor._find_anchor_elements(anchor_parent_id)
         if (parent_start is None or parent_end is None) and parent_ref is None:
             raise ValueError(f"Could not find anchors for comment {anchor_parent_id}")
 
@@ -1668,14 +1640,10 @@ class CommentManager:
         if initials is not None:
             comment_elem.set(_qn(NS_W, "initials"), initials)
         if timestamp is not None:
-            comment_elem.set(
-                _qn(NS_W, "date"), timestamp.isoformat(timespec="seconds")
-            )
+            comment_elem.set(_qn(NS_W, "date"), timestamp.isoformat(timespec="seconds"))
             durable = durable_ids.get(primary)
             if durable:
-                CommentsExtensiblePart(self._document).set_date_utc(
-                    durable, _format_utc(timestamp)
-                )
+                CommentsExtensiblePart(self._document).set_date_utc(durable, _format_utc(timestamp))
 
         # Only the primary paraId survives the rebuild (non-last paragraphs
         # get fresh ids); metadata keyed to any other old paraId is orphaned.

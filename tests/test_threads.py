@@ -137,9 +137,7 @@ def test_reply_into_resolved_thread_inherits_done():
     mgr.resolve_comment(cid)
     mgr.reply_to_comment(cid, "late reply", PersonInfo(author="B"))
     comments = list(mgr.list_comments())
-    assert all(c.is_resolved for c in comments), (
-        "reply into a resolved thread must inherit done=1"
-    )
+    assert all(c.is_resolved for c in comments), "reply into a resolved thread must inherit done=1"
     thread = mgr.get_comment_threads()[0]
     assert thread.is_resolved
 

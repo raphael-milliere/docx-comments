@@ -71,9 +71,7 @@ class TestAnchorIntrospection:
         para.add_run("two ")
         para.add_run("three")
         mgr = CommentManager(doc)
-        cid = mgr.add_comment(
-            para, "c", PersonInfo(author="A"), start_run=1, end_run=1
-        )
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"), start_run=1, end_run=1)
         assert mgr.get_anchored_text(cid) == "two "
 
     def test_anchored_text_includes_container_content(self):

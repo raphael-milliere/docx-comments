@@ -26,15 +26,18 @@ class TestFormattedRuns:
         doc, para, mgr = _setup()
         mgr.add_comment(
             para,
-            [[("b", {"bold": True}), ("i", {"italic": True}),
-              ("u", {"underline": True}), " plain"]],
+            [
+                [
+                    ("b", {"bold": True}),
+                    ("i", {"italic": True}),
+                    ("u", {"underline": True}),
+                    " plain",
+                ]
+            ],
             PersonInfo(author="A"),
         )
         comment = mgr._comments_xml.find(qn(NS_W, "comment"))
-        runs = [
-            r for r in comment.iter(qn(NS_W, "r"))
-            if r.find(qn(NS_W, "annotationRef")) is None
-        ]
+        runs = [r for r in comment.iter(qn(NS_W, "r")) if r.find(qn(NS_W, "annotationRef")) is None]
         assert runs[0].find(f"{qn(NS_W, 'rPr')}/{qn(NS_W, 'b')}") is not None
         assert runs[1].find(f"{qn(NS_W, 'rPr')}/{qn(NS_W, 'i')}") is not None
         u = runs[2].find(f"{qn(NS_W, 'rPr')}/{qn(NS_W, 'u')}")
