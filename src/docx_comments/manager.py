@@ -800,9 +800,13 @@ class CommentManager:
         people_part = PeoplePart(self._document)
         return people_part.ensure_person(author, presence)
 
-    def _parse_author_spec(self, author: PersonInfo) -> tuple[str, Optional[dict[str, str]]]:
+    def _parse_author_spec(
+        self, author: Union[str, PersonInfo]
+    ) -> tuple[str, Optional[dict[str, str]]]:
+        if isinstance(author, str):
+            author = PersonInfo(author=author)
         if not isinstance(author, PersonInfo):
-            raise TypeError("author must be a PersonInfo")
+            raise TypeError("author must be a str or PersonInfo")
 
         author_name = author.author
         if not author_name:
@@ -1014,7 +1018,7 @@ class CommentManager:
         self,
         paragraph: Paragraph,
         text: CommentContent,
-        author: PersonInfo,
+        author: Union[str, PersonInfo],
         initials: Optional[str] = None,
         start_run: int = 0,
         end_run: Optional[int] = None,
@@ -1035,7 +1039,8 @@ class CommentManager:
                 each a str or a sequence of runs, where a run is a str or
                 (text, format) with format keys "bold"/"italic"/"underline",
                 e.g. ``[[("urgent", {"bold": True}), " please fix"], "thanks"]``.
-            author: PersonInfo instance.
+            author: Author name as a plain string, or a PersonInfo (required
+                for presence linkage).
             initials: Author initials (optional).
             start_run: Index of first run to anchor (default: 0). Python-style
                 negative indices are accepted; out-of-range indices raise.
@@ -1151,7 +1156,7 @@ class CommentManager:
         paragraph: Paragraph,
         match: Union[str, re.Pattern[str]],
         text: CommentContent,
-        author: PersonInfo,
+        author: Union[str, PersonInfo],
         initials: Optional[str] = None,
         occurrence: int = 1,
         person: Optional[PersonSpec] = None,
@@ -1163,6 +1168,8 @@ class CommentManager:
             paragraph: The paragraph to search (visible text; br/cr/tab
                 count as one character, matching get_anchored_text).
             match: Substring or compiled regular expression to anchor.
+            author: Author name as a plain string, or a PersonInfo (required
+                for presence linkage).
             occurrence: 1-based occurrence to anchor (default: first).
             (other args as add_comment)
 
@@ -1212,7 +1219,7 @@ class CommentManager:
         self,
         parent_id: Union[int, str],
         text: CommentContent,
-        author: PersonInfo,
+        author: Union[str, PersonInfo],
         initials: Optional[str] = None,
         person: Optional[PersonSpec] = None,
         timestamp: Optional[datetime] = None,
@@ -1226,7 +1233,8 @@ class CommentManager:
                 the same forms as add_comment: a plain str, or a sequence
                 of paragraphs of (text, format) runs, e.g.
                 ``[[("agreed", {"italic": True})]]``.
-            author: PersonInfo instance.
+            author: Author name as a plain string, or a PersonInfo (required
+                for presence linkage).
             initials: Author initials (optional).
             person: Optional people.xml entry to link author identity (see
                 add_comment for the accepted forms).
@@ -1238,8 +1246,8 @@ class CommentManager:
 
         Raises:
             CommentNotFoundError: If the parent comment is not found.
-            TypeError: If author is not a PersonInfo (or str once Task 12
-                lands) or parent_id is neither str nor int.
+            TypeError: If author is neither a str nor a PersonInfo, or
+                parent_id is neither str nor int.
             ValueError: If the text/author/initials contain characters not
                 allowed in XML, the person spec is invalid, or the parent
                 comment has no anchors in the document.

@@ -94,3 +94,35 @@ class TestHonestHints:
 
         hints = get_type_hints(CommentInfo)
         assert hints["comment_id"] == Optional[str]
+
+
+class TestStrAuthor:
+    def test_plain_str_author(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", "Reviewer Name", initials="RN")
+        info = mgr.get_comment(cid)
+        assert info.author == "Reviewer Name" and info.initials == "RN"
+
+    def test_str_author_in_reply(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", "A")
+        rid = mgr.reply_to_comment(cid, "r", "B")
+        assert mgr.get_comment(rid).author == "B"
+
+    def test_str_author_on_text(self):
+        doc = Document()
+        para = doc.add_paragraph("find this word here")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment_on_text(para, "word", "c", "C")
+        assert mgr.get_comment(cid).author == "C"
+
+    def test_invalid_author_type(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        with pytest.raises(TypeError):
+            mgr.add_comment(para, "c", 42)

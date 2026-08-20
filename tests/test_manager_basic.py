@@ -61,18 +61,11 @@ class TestCommentManagerBasic:
         comments2 = list(mgr2.list_comments())
         assert len(comments2) == 1
 
-    def test_add_comment_rejects_non_personinfo_author(self):
-        """Author must be PersonInfo."""
+    def test_add_comment_rejects_invalid_author_type(self):
+        """Author must be a str or PersonInfo."""
         doc = Document()
         para = doc.add_paragraph("This is test text to comment on.")
         mgr = CommentManager(doc)
-
-        with pytest.raises(TypeError):
-            mgr.add_comment(
-                paragraph=para,
-                text="This is a test comment",
-                author="Test Author",
-            )
 
         with pytest.raises(TypeError):
             mgr.add_comment(
