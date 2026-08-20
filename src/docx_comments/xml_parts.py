@@ -560,6 +560,23 @@ class CommentsExtensiblePart(_BasePartHandler):
             elem.set(_qn(NS_W16CEX, "dateUtc"), date_utc)
         self._save()
 
+    def set_date_utc(self, durable_id: str, date_utc: str) -> bool:
+        """Overwrite the dateUtc for an existing entry.
+
+        Returns True when an entry was updated.
+        """
+        updated = False
+        for elem in self.xml:
+            if (
+                etree.QName(elem).localname == "commentExtensible"
+                and elem.get(_qn(NS_W16CEX, "durableId")) == durable_id
+            ):
+                elem.set(_qn(NS_W16CEX, "dateUtc"), date_utc)
+                updated = True
+        if updated:
+            self._save()
+        return updated
+
     def remove_comment_extensible(self, durable_id: str) -> bool:
         """
         Remove a commentExtensible entry by durableId.

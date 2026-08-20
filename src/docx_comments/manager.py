@@ -245,6 +245,26 @@ class CommentManager:
                 used.add(candidate)
                 return candidate
 
+    @staticmethod
+    def _primary_para_id(
+        para_ids: list[str],
+        threading: dict[str, dict],
+        durable_ids: dict[str, str],
+    ) -> Optional[str]:
+        """The paraId that keys a comment's satellite metadata.
+
+        Word keys commentsExtended/commentsIds to the LAST paragraph of a
+        comment; prefer a paraId with a threading entry, then one with a
+        durable id, then the last paragraph.
+        """
+        for pid in reversed(para_ids):
+            if pid in threading:
+                return pid
+        for pid in reversed(para_ids):
+            if pid in durable_ids:
+                return pid
+        return para_ids[-1] if para_ids else None
+
     def _comment_index(
         self,
     ) -> tuple[list[CommentInfo], dict[str, CommentInfo], dict[str, CommentInfo]]:
@@ -578,19 +598,11 @@ class CommentManager:
 
         # Build CommentInfo objects
         for info in comments_data:
-            para_ids = info["para_ids"]
-            para_id = None
-            for pid in reversed(para_ids):
-                if pid in threading:
-                    para_id = pid
-                    break
-            if para_id is None:
-                for pid in reversed(para_ids):
-                    if pid in durable_ids:
-                        para_id = pid
-                        break
-            if para_id is None and para_ids:
-                para_id = para_ids[-1]
+            # "" when no paraId is identifiable (never a key in the satellite
+            # parts, so the lookups below fall through to their defaults).
+            para_id = (
+                self._primary_para_id(info["para_ids"], threading, durable_ids) or ""
+            )
 
             thread_info = threading.get(para_id, {})
             parent_para_id = thread_info.get("parent_para_id")
@@ -600,7 +612,7 @@ class CommentManager:
                 parent_para_id = None
             yield CommentInfo(
                 comment_id=info["comment_id"],
-                para_id=para_id or "",
+                para_id=para_id,
                 text=info["text"],
                 author=info["author"],
                 initials=info["initials"],
@@ -1332,6 +1344,111 @@ class CommentManager:
             remaining_para_ids = self._collect_comment_para_ids()
             self._cleanup_orphan_metadata(remaining_para_ids)
             self._detach_orphan_replies(remaining_para_ids)
+
+    def edit_comment(
+        self,
+        comment_id: Union[int, str],
+        text: str,
+        author: Optional[str] = None,
+        initials: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        """Replace a comment's text in place.
+
+        The comment id, primary paraId, durable id, threading (replies),
+        resolution state, and document anchors are all preserved; only the
+        content (and optionally author/initials/date) changes. w14:textId
+        is refreshed, matching Word's text-revision semantics.
+
+        Args:
+            comment_id: The comment to edit.
+            text: New comment text (same encoding rules as add_comment).
+            author: Optional new author name.
+            initials: Optional new initials.
+            timestamp: Optional new date (naive = local time); also updates
+                the commentsExtensible dateUtc entry.
+
+        Raises:
+            CommentNotFoundError: If no comment has this id.
+            ValueError: If text/author/initials contain characters not
+                allowed in XML, or author is empty.
+        """
+        comment_id = _coerce_comment_id(comment_id)
+        _validate_xml_text(text, "comment text")
+        if author is not None:
+            if not author:
+                raise ValueError("author must be non-empty")
+            _validate_xml_text(author, "author")
+        if initials is not None:
+            _validate_xml_text(initials, "initials")
+        if timestamp is not None and timestamp.tzinfo is None:
+            timestamp = timestamp.astimezone()
+
+        comment_elem = None
+        for elem in self._comments_xml.findall(_qn(NS_W, "comment")):
+            if elem.get(_qn(NS_W, "id")) == comment_id:
+                comment_elem = elem
+                break
+        if comment_elem is None:
+            raise CommentNotFoundError(f"Comment {comment_id} not found")
+
+        threading = CommentsExtendedPart(self._document).get_threading_info()
+        durable_ids = CommentsIdsPart(self._document).get_durable_ids()
+        para_ids = [
+            para.get(_qn(NS_W14, "paraId"))
+            for para in comment_elem.findall(_qn(NS_W, "p"))
+            if para.get(_qn(NS_W14, "paraId"))
+        ]
+        primary = self._primary_para_id(para_ids, threading, durable_ids)
+
+        used_hex_ids = self._used_long_hex_ids()
+        if primary is None:
+            primary = self._new_long_hex_id(used_hex_ids)
+        text_id = self._new_long_hex_id(used_hex_ids)
+
+        rsid_r = uuid.uuid4().hex[:8].upper()
+        rsid_default = uuid.uuid4().hex[:8].upper()
+        rsid_rpr = uuid.uuid4().hex[:8].upper()
+
+        new_para = etree.Element(_qn(NS_W, "p"))
+        new_para.set(_qn(NS_W, "rsidR"), rsid_r)
+        new_para.set(_qn(NS_W, "rsidRDefault"), rsid_default)
+        new_para.set(_qn(NS_W14, "paraId"), primary)
+        new_para.set(_qn(NS_W14, "textId"), text_id)
+        pPr = etree.SubElement(new_para, _qn(NS_W, "pPr"))
+        pStyle = etree.SubElement(pPr, _qn(NS_W, "pStyle"))
+        pStyle.set(_qn(NS_W, "val"), "CommentText")
+        run1 = etree.SubElement(new_para, _qn(NS_W, "r"))
+        rPr = etree.SubElement(run1, _qn(NS_W, "rPr"))
+        rStyle = etree.SubElement(rPr, _qn(NS_W, "rStyle"))
+        rStyle.set(_qn(NS_W, "val"), "CommentReference")
+        etree.SubElement(run1, _qn(NS_W, "annotationRef"))
+        self._append_text_content(new_para, text, rsid_rpr)
+
+        for para in comment_elem.findall(_qn(NS_W, "p")):
+            comment_elem.remove(para)
+        comment_elem.append(new_para)
+
+        if author is not None:
+            comment_elem.set(_qn(NS_W, "author"), author)
+        if initials is not None:
+            comment_elem.set(_qn(NS_W, "initials"), initials)
+        if timestamp is not None:
+            comment_elem.set(
+                _qn(NS_W, "date"), timestamp.isoformat(timespec="seconds")
+            )
+            durable = durable_ids.get(primary)
+            if durable:
+                CommentsExtensiblePart(self._document).set_date_utc(
+                    durable, _format_utc(timestamp)
+                )
+
+        # Multi-paragraph comments collapse to one paragraph; metadata for
+        # the dropped paragraphs (if any existed) is now orphaned.
+        dropped = {pid for pid in para_ids if pid != primary}
+        self._cleanup_comment_metadata(dropped)
+
+        self._save_comments()
 
     def move_comment(
         self,
