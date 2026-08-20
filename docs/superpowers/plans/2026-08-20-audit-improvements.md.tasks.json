@@ -10,7 +10,7 @@
     {
       "id": 1,
       "subject": "Task 1: Exceptions, int ids, honest hints",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** CommentNotFoundError(ValueError,LookupError)/PersonNotFoundError(KeyError) adopted at all raise sites; int comment-id coercion at public entry points; CommentInfo.comment_id Optional[str]; docstring Raises completed.\n\n**Files:**\n- src/docx_comments/exceptions.py\n- src/docx_comments/manager.py\n- src/docx_comments/xml_parts.py\n- src/docx_comments/models.py\n- src/docx_comments/__init__.py\n- tests/test_api_polish.py\n\n**Acceptance Criteria:**\n- [ ] typed exceptions exist, subclass legacy types, exported from docx_comments\n- [ ] int ids coerced everywhere; bool/other types TypeError\n- [ ] CommentInfo.comment_id is Optional[str] with documented None/empty-string cases\n\n**Verify:** pytest tests/test_api_polish.py -v && mypy src/docx_comments\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/exceptions.py\", \"src/docx_comments/manager.py\", \"src/docx_comments/xml_parts.py\", \"src/docx_comments/models.py\", \"src/docx_comments/__init__.py\", \"tests/test_api_polish.py\"], \"verifyCommand\": \"pytest tests/test_api_polish.py -v && mypy src/docx_comments\", \"acceptanceCriteria\": [\"typed exceptions exist, subclass legacy types, exported from docx_comments\", \"int ids coerced everywhere; bool/other types TypeError\", \"CommentInfo.comment_id is Optional[str] with documented None/empty-string cases\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         0
@@ -19,7 +19,7 @@
     {
       "id": 2,
       "subject": "Task 2: ST_OnOff done parsing + mc:Ignorable",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** get_threading_info parses done as ST_OnOff (1/true/on); ensure_mc_ignorable helper applied to native comments.xml creation and migrate path.\n\n**Files:**\n- src/docx_comments/xml_parts.py\n- src/docx_comments/manager.py\n- tests/test_robustness.py\n- tests/test_xml.py\n\n**Acceptance Criteria:**\n- [ ] done=true/on read as resolved; false/0/garbage unresolved\n- [ ] saved native-template comments.xml root has mc:Ignorable containing w14\n- [ ] migrate adds mc:Ignorable to foreign comments.xml declaring the prefixes\n\n**Verify:** pytest tests/test_robustness.py tests/test_xml.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/xml_parts.py\", \"src/docx_comments/manager.py\", \"tests/test_robustness.py\", \"tests/test_xml.py\"], \"verifyCommand\": \"pytest tests/test_robustness.py tests/test_xml.py -q\", \"acceptanceCriteria\": [\"done=true/on read as resolved; false/0/garbage unresolved\", \"saved native-template comments.xml root has mc:Ignorable containing w14\", \"migrate adds mc:Ignorable to foreign comments.xml declaring the prefixes\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         1
@@ -28,7 +28,7 @@
     {
       "id": 3,
       "subject": "Task 3: Block-level reply fix + ref-only anchors",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Reply/move onto block-level (body/tr) ranges places reference run at a schema-valid position (adjacent to parent ref run, else last paragraph in range); reference-only-anchored comments become reply-able (synthesized ranges); anchor-less still raises cleanly.\n\n**Files:**\n- src/docx_comments/anchors.py\n- src/docx_comments/manager.py\n- tests/test_robustness.py\n\n**Acceptance Criteria:**\n- [ ] no bare w:r under body/tr after replies to block-level ranges\n- [ ] reference-only parents reply-able with synthesized ranges\n- [ ] no-anchor parents raise ValueError with no orphan reply\n- [ ] existing reply ordering tests still pass\n\n**Verify:** pytest tests/test_robustness.py::TestBlockLevelAnchors tests/test_xml.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/anchors.py\", \"src/docx_comments/manager.py\", \"tests/test_robustness.py\"], \"verifyCommand\": \"pytest tests/test_robustness.py::TestBlockLevelAnchors tests/test_xml.py -q\", \"acceptanceCriteria\": [\"no bare w:r under body/tr after replies to block-level ranges\", \"reference-only parents reply-able with synthesized ranges\", \"no-anchor parents raise ValueError with no orphan reply\", \"existing reply ordering tests still pass\"], \"modelTier\": \"frontier\"}\n```",
       "blockedBy": [
         2
@@ -37,7 +37,7 @@
     {
       "id": 4,
       "subject": "Task 4: Container-inclusive default anchors + styled ref runs",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Index-free default span covers direct runs AND hyperlink/ins/del/sdt containers in document order; every inserted reference run gets rPr/rStyle CommentReference via _make_reference_run.\n\n**Files:**\n- src/docx_comments/anchors.py\n- tests/test_robustness.py\n\n**Acceptance Criteria:**\n- [ ] default span covers containers in document order; explicit indices unchanged\n- [ ] reference runs styled CommentReference\n- [ ] styled ref runs still fully removed by remove_anchors\n\n**Verify:** pytest tests/test_robustness.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/anchors.py\", \"tests/test_robustness.py\"], \"verifyCommand\": \"pytest tests/test_robustness.py -q\", \"acceptanceCriteria\": [\"default span covers containers in document order; explicit indices unchanged\", \"reference runs styled CommentReference\", \"styled ref runs still fully removed by remove_anchors\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         3
@@ -46,7 +46,7 @@
     {
       "id": 5,
       "subject": "Task 5: Replies inherit thread done state",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** reply_to_comment passes the effective parent's current done flag instead of hardcoded False.\n\n**Files:**\n- src/docx_comments/manager.py\n- tests/test_threads.py\n\n**Acceptance Criteria:**\n- [ ] reply into resolved thread has done=1 and thread stays consistent\n- [ ] reply into open thread stays done=0\n\n**Verify:** pytest tests/test_threads.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/manager.py\", \"tests/test_threads.py\"], \"verifyCommand\": \"pytest tests/test_threads.py -q\", \"acceptanceCriteria\": [\"reply into resolved thread has done=1 and thread stays consistent\", \"reply into open thread stays done=0\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         4
@@ -55,7 +55,7 @@
     {
       "id": 6,
       "subject": "Task 6: Person XML validation + atomic people.xml",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** validate_xml_text moved to xml_parts (manager aliases it); _resolve_person_spec validates author/presence XML-legality; ensure_person validates up front and builds w15:person detached (no half-built entries, no premature part creation).\n\n**Files:**\n- src/docx_comments/xml_parts.py\n- src/docx_comments/manager.py\n- tests/test_people.py\n\n**Acceptance Criteria:**\n- [ ] illegal presence via add_comment raises before ANY part creation\n- [ ] failed ensure_person leaves no ghost entry for later saves\n- [ ] manager._validate_xml_text still importable\n\n**Verify:** pytest tests/test_people.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/xml_parts.py\", \"src/docx_comments/manager.py\", \"tests/test_people.py\"], \"verifyCommand\": \"pytest tests/test_people.py -q\", \"acceptanceCriteria\": [\"illegal presence via add_comment raises before ANY part creation\", \"failed ensure_person leaves no ghost entry for later saves\", \"manager._validate_xml_text still importable\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         5
@@ -64,7 +64,7 @@
     {
       "id": 7,
       "subject": "Task 7: Read API - get_comment/thread/paragraph/anchored_text",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Public get_comment, get_thread, get_comment_paragraph, get_anchored_text on CommentManager; CommentAnchor.get_anchored_text walks document order between range markers with _comment_text-equivalent rules.\n\n**Files:**\n- src/docx_comments/manager.py\n- src/docx_comments/anchors.py\n- tests/test_read_api.py\n\n**Acceptance Criteria:**\n- [ ] lookups raise CommentNotFoundError; accept int ids\n- [ ] anchored text exact for run ranges, containers, multi-paragraph block ranges, empty paragraphs\n- [ ] None returned for reference-only/anchor-less comments\n\n**Verify:** pytest tests/test_read_api.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/manager.py\", \"src/docx_comments/anchors.py\", \"tests/test_read_api.py\"], \"verifyCommand\": \"pytest tests/test_read_api.py -q\", \"acceptanceCriteria\": [\"lookups raise CommentNotFoundError; accept int ids\", \"anchored text exact for run ranges, containers, multi-paragraph block ranges, empty paragraphs\", \"None returned for reference-only/anchor-less comments\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         6
@@ -73,7 +73,7 @@
     {
       "id": 8,
       "subject": "Task 8: Timestamp params + date parsing tests",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** add_comment/reply_to_comment accept timestamp (naive interpreted as local); _parse_comment_date unit tests; round-trip and dateUtc cross-part assertions; corrupted-date thread sort pinned.\n\n**Files:**\n- src/docx_comments/manager.py\n- tests/test_timestamps.py\n\n**Acceptance Criteria:**\n- [ ] timestamp round-trips to the second and feeds commentsExtensible dateUtc\n- [ ] naive timestamps treated as local\n- [ ] garbage w:date yields timestamp=None without breaking threads\n\n**Verify:** pytest tests/test_timestamps.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/manager.py\", \"tests/test_timestamps.py\"], \"verifyCommand\": \"pytest tests/test_timestamps.py -q\", \"acceptanceCriteria\": [\"timestamp round-trips to the second and feeds commentsExtensible dateUtc\", \"naive timestamps treated as local\", \"garbage w:date yields timestamp=None without breaking threads\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         7
@@ -82,7 +82,7 @@
     {
       "id": 9,
       "subject": "Task 9: edit_comment",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** In-place edit preserving comment id/primary paraId/durable id/threading/resolution/anchors; refreshes textId; optional author/initials/timestamp (updates dateUtc via new CommentsExtensiblePart.set_date_utc); _primary_para_id helper extracted and reused in list_comments.\n\n**Files:**\n- src/docx_comments/manager.py\n- src/docx_comments/xml_parts.py\n- tests/test_editing.py\n\n**Acceptance Criteria:**\n- [ ] identity/thread/anchors preserved across edit; replies intact after save/reload\n- [ ] textId refreshed\n- [ ] timestamp updates w:date + dateUtc\n- [ ] all validation before mutation; unknown id -> CommentNotFoundError\n\n**Verify:** pytest tests/test_editing.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/manager.py\", \"src/docx_comments/xml_parts.py\", \"tests/test_editing.py\"], \"verifyCommand\": \"pytest tests/test_editing.py -q\", \"acceptanceCriteria\": [\"identity/thread/anchors preserved across edit; replies intact after save/reload\", \"textId refreshed\", \"timestamp updates w:date + dateUtc\", \"all validation before mutation; unknown id -> CommentNotFoundError\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         8
@@ -91,7 +91,7 @@
     {
       "id": 10,
       "subject": "Task 10: Rich content (formatted runs, multi-paragraph)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** CommentContent union (str | paragraphs of str|(text,fmt) runs) accepted by add/reply/edit; bold/italic/underline rPr; multi-paragraph comments keyed to LAST paragraph's paraId (Word convention); annotationRef on first paragraph only.\n\n**Files:**\n- src/docx_comments/models.py\n- src/docx_comments/manager.py\n- src/docx_comments/__init__.py\n- tests/test_rich_content.py\n\n**Acceptance Criteria:**\n- [ ] plain str behavior unchanged\n- [ ] b/i/u runs emitted correctly\n- [ ] multi-paragraph metadata keyed to last paraId; text reads back with \\n joins\n- [ ] unknown fmt keys/empty content/illegal chars raise before mutation\n\n**Verify:** pytest tests/test_rich_content.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/models.py\", \"src/docx_comments/manager.py\", \"src/docx_comments/__init__.py\", \"tests/test_rich_content.py\"], \"verifyCommand\": \"pytest tests/test_rich_content.py -q\", \"acceptanceCriteria\": [\"plain str behavior unchanged\", \"b/i/u runs emitted correctly\", \"multi-paragraph metadata keyed to last paraId; text reads back with \\\\n joins\", \"unknown fmt keys/empty content/illegal chars raise before mutation\"], \"modelTier\": \"frontier\"}\n```",
       "blockedBy": [
         9
@@ -100,7 +100,7 @@
     {
       "id": 11,
       "subject": "Task 11: Char-offset + substring anchoring",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Atom iteration/paragraph_text/char-bounds validation/run splitting (_split_run_at_child, _split_run_at_text, _ensure_run_boundary) in anchors.py; add_comment start_char/end_char; add_comment_on_text with substring/regex + occurrence. Splitting never changes visible text.\n\n**Files:**\n- src/docx_comments/anchors.py\n- src/docx_comments/manager.py\n- tests/test_char_anchoring.py\n\n**Acceptance Criteria:**\n- [ ] exact char spans anchored via run splitting; formatting and whitespace preserved\n- [ ] visible text identical before/after and across save/reload\n- [ ] boundary offsets do not split; splits work inside hyperlink/ins\n- [ ] substring/regex/occurrence targeting; clear errors with counts; no mutation on validation failure\n\n**Verify:** pytest tests/test_char_anchoring.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/anchors.py\", \"src/docx_comments/manager.py\", \"tests/test_char_anchoring.py\"], \"verifyCommand\": \"pytest tests/test_char_anchoring.py -q\", \"acceptanceCriteria\": [\"exact char spans anchored via run splitting; formatting and whitespace preserved\", \"visible text identical before/after and across save/reload\", \"boundary offsets do not split; splits work inside hyperlink/ins\", \"substring/regex/occurrence targeting; clear errors with counts; no mutation on validation failure\"], \"modelTier\": \"frontier\"}\n```",
       "blockedBy": [
         10
@@ -109,7 +109,7 @@
     {
       "id": 12,
       "subject": "Task 12: Plain-str authors",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** _parse_author_spec promotes str to PersonInfo; signatures/docstrings widened on add_comment/reply_to_comment/add_comment_on_text.\n\n**Files:**\n- src/docx_comments/manager.py\n- tests/test_api_polish.py\n\n**Acceptance Criteria:**\n- [ ] str author works in add/reply\n- [ ] PersonInfo path (presence auto-link) unchanged\n- [ ] TypeError for other types\n\n**Verify:** pytest tests/test_api_polish.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/manager.py\", \"tests/test_api_polish.py\"], \"verifyCommand\": \"pytest tests/test_api_polish.py -q\", \"acceptanceCriteria\": [\"str author works in add/reply\", \"PersonInfo path (presence auto-link) unchanged\", \"TypeError for other types\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         11
@@ -118,7 +118,7 @@
     {
       "id": 13,
       "subject": "Task 13: Skip redundant migration in resolve/delete",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** _metadata_complete() checks comments.xml + satellite parts only (no body scan); set_comment_resolved/delete_comment/delete_thread migrate only when incomplete.\n\n**Files:**\n- src/docx_comments/manager.py\n- tests/test_editing.py\n\n**Acceptance Criteria:**\n- [ ] migration skipped on complete metadata (spy assertion)\n- [ ] still runs on any incompleteness and op still works\n- [ ] check reads no document body\n\n**Verify:** pytest tests/test_editing.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/manager.py\", \"tests/test_editing.py\"], \"verifyCommand\": \"pytest tests/test_editing.py -q\", \"acceptanceCriteria\": [\"migration skipped on complete metadata (spy assertion)\", \"still runs on any incompleteness and op still works\", \"check reads no document body\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         12
@@ -127,7 +127,7 @@
     {
       "id": 14,
       "subject": "Task 14: Coverage batch A",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Tests: person=True/dict forms/TypeError/reply person=True; presence auto-link pinned + docstring fixed; auto_migrate on/off; delete_thread/move ops unknown-id no-mutation; move_thread explicit indices; empty-paragraph anchor shape + move onto empty para.\n\n**Files:**\n- src/docx_comments/manager.py\n- tests/test_people.py\n- tests/test_migration.py\n- tests/test_robustness.py\n- tests/test_editing.py\n\n**Acceptance Criteria:**\n- [ ] person spec forms tested with saved-XML assertions\n- [ ] auto-link behavior pinned and docstring corrected\n- [ ] lifecycle not-found paths tested with no-mutation assertions\n- [ ] empty-paragraph XML shape pinned\n\n**Verify:** pytest tests/test_people.py tests/test_migration.py tests/test_robustness.py tests/test_editing.py -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"src/docx_comments/manager.py\", \"tests/test_people.py\", \"tests/test_migration.py\", \"tests/test_robustness.py\", \"tests/test_editing.py\"], \"verifyCommand\": \"pytest tests/test_people.py tests/test_migration.py tests/test_robustness.py tests/test_editing.py -q\", \"acceptanceCriteria\": [\"person spec forms tested with saved-XML assertions\", \"auto-link behavior pinned and docstring corrected\", \"lifecycle not-found paths tested with no-mutation assertions\", \"empty-paragraph XML shape pinned\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         13
@@ -136,7 +136,7 @@
     {
       "id": 15,
       "subject": "Task 15: Coverage batch B",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Hermetic conftest (delenv + stub _system_office_user_info); system_author plist/env/warning/error tests; get_authors/get_document_author tests; commentsExtensible saved-zip + dateUtc==UTC(w:date) invariant; paraIdParent cycle termination.\n\n**Files:**\n- tests/conftest.py\n- tests/test_system_author.py\n- tests/test_manager_basic.py\n- tests/test_xml.py\n- tests/test_robustness.py\n\n**Acceptance Criteria:**\n- [ ] autouse hermetic fixture active\n- [ ] system_author >= 85% covered\n- [ ] author getters covered\n- [ ] extensible cross-part invariant pinned\n- [ ] cycle guard exercised\n\n**Verify:** pytest -q && pytest --cov=docx_comments -q\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"tests/conftest.py\", \"tests/test_system_author.py\", \"tests/test_manager_basic.py\", \"tests/test_xml.py\", \"tests/test_robustness.py\"], \"verifyCommand\": \"pytest -q\", \"acceptanceCriteria\": [\"autouse hermetic fixture active\", \"system_author >= 85% covered\", \"author getters covered\", \"extensible cross-part invariant pinned\", \"cycle guard exercised\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         14
@@ -145,7 +145,7 @@
     {
       "id": 16,
       "subject": "Task 16: CI matrix + format gate",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** lint job (ruff check/format-check/mypy); test matrix ubuntu 3.9-3.14 + macos 3.11/3.14 + windows 3.9/3.14 with bash-shell venv activation; codecov step removed; ci-passed updated. Run ruff format locally so the new gate passes.\n\n**Files:**\n- .github/workflows/ci.yml\n\n**Acceptance Criteria:**\n- [ ] lint job with format check\n- [ ] mac/windows matrix legs\n- [ ] codecov step removed\n- [ ] ruff format --check clean on the branch\n\n**Verify:** python3 -c yaml.safe_load parses ci.yml; ruff format --check src/ tests/\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\".github/workflows/ci.yml\"], \"verifyCommand\": \"ruff format --check src/ tests/\", \"acceptanceCriteria\": [\"lint job with format check\", \"mac/windows matrix legs\", \"codecov step removed\", \"ruff format --check clean on the branch\"], \"modelTier\": \"mechanical\"}\n```",
       "blockedBy": [
         15
@@ -154,7 +154,7 @@
     {
       "id": 17,
       "subject": "Task 17: Docs (README/CHANGELOG/CLAUDE.md)",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** README: new-API usage sections + full API summary table + str-author fix; CHANGELOG [0.5.0] Unreleased with complete Added/Fixed/Changed; CLAUDE.md module/testing updates.\n\n**Files:**\n- README.md\n- CHANGELOG.md\n- CLAUDE.md\n\n**Acceptance Criteria:**\n- [ ] README documents all new APIs + API summary table\n- [ ] CHANGELOG 0.5.0 section complete\n- [ ] CLAUDE.md updated\n\n**Verify:** grep -c add_comment_on_text README.md >= 2; grep 0.5.0 CHANGELOG.md\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"README.md\", \"CHANGELOG.md\", \"CLAUDE.md\"], \"verifyCommand\": \"grep -c add_comment_on_text README.md && grep -c 0.5.0 CHANGELOG.md\", \"acceptanceCriteria\": [\"README documents all new APIs + API summary table\", \"CHANGELOG 0.5.0 section complete\", \"CLAUDE.md updated\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         16
@@ -163,12 +163,12 @@
     {
       "id": 18,
       "subject": "Task 18: Final verification + adversarial review",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** All gates (pytest+cov, mypy, ruff check, ruff format --check); adversarial multi-lens review of git diff main...audit-improvements; fix confirmed findings with regression tests; report coverage figure and the open release decision to the user.\n\n**Files:**\n\n\n**Acceptance Criteria:**\n- [ ] all gates green\n- [ ] adversarial review run; confirmed findings fixed or recorded as declined\n- [ ] final report includes coverage figure and release decision\n\n**Verify:** pytest --cov=docx_comments -q && mypy src/docx_comments && ruff check src/ tests/ && ruff format --check src/ tests/\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [], \"verifyCommand\": \"pytest --cov=docx_comments -q && mypy src/docx_comments && ruff check src/ tests/ && ruff format --check src/ tests/\", \"acceptanceCriteria\": [\"all gates green\", \"adversarial review run; confirmed findings fixed or recorded as declined\", \"final report includes coverage figure and release decision\"], \"modelTier\": \"standard\"}\n```",
       "blockedBy": [
         17
       ]
     }
   ],
-  "lastUpdated": "2026-08-20T00:12:00Z"
+  "lastUpdated": "2026-08-20T06:15:00Z"
 }
