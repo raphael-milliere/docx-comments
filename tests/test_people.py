@@ -1,6 +1,7 @@
 """Tests for people.xml identity support."""
 
 import warnings
+import zipfile
 
 import pytest
 from docx import Document
@@ -228,3 +229,37 @@ class TestPeopleXml:
         assert presence is not None
         assert presence.get(f"{{{ns_w15}}}providerId") == "provider"
         assert presence.get(f"{{{ns_w15}}}userId") == "user"
+
+
+class TestPersonXmlLegality:
+    def test_illegal_presence_raises_before_any_mutation(self, tmp_path):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        with pytest.raises(ValueError, match="not allowed in XML"):
+            mgr.add_comment(
+                para,
+                "c",
+                PersonInfo(author="A"),
+                person={"provider_id": "AD\x00", "user_id": "u"},
+            )
+        path = tmp_path / "clean.docx"
+        doc.save(str(path))
+        with zipfile.ZipFile(path) as zf:
+            names = set(zf.namelist())
+        assert "word/comments.xml" not in names
+        assert "word/people.xml" not in names
+
+    def test_illegal_author_in_ensure_person_no_ghost_entry(self, tmp_path):
+        doc = Document()
+        mgr = CommentManager(doc)
+        with pytest.raises(ValueError, match="not allowed in XML"):
+            mgr.ensure_person("bad\x00author")
+        assert mgr.get_people() == []
+        # A later valid write must not resurrect a half-built entry.
+        mgr.ensure_person("Good Author")
+        path = tmp_path / "p.docx"
+        doc.save(str(path))
+        doc2 = Document(str(path))
+        people = CommentManager(doc2).get_people()
+        assert [p.author for p in people] == ["Good Author"]

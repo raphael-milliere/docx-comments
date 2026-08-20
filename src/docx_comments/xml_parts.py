@@ -81,6 +81,19 @@ def parse_xml_bytes(blob: bytes) -> etree._Element:
     return etree.fromstring(blob, _SAFE_PARSER)
 
 
+def validate_xml_text(value: Optional[str], what: str) -> None:
+    """Raise a clear ValueError when a string cannot be stored in XML."""
+    if value is None:
+        return
+    probe = etree.Element("probe")
+    try:
+        probe.text = value
+    except ValueError as exc:
+        raise ValueError(
+            f"{what} contains characters not allowed in XML: {exc}"
+        ) from exc
+
+
 def part_is_blob_backed(part: Any) -> bool:
     """True when the part serialises from its ``_blob`` (generic Part).
 
@@ -717,26 +730,34 @@ class PeoplePart(_BasePartHandler):
         """Ensure a person entry exists, optionally adding presence metadata."""
         if not author:
             raise ValueError("author must be non-empty")
+        validate_xml_text(author, "person author")
 
-        # Validate presence before touching the package so a bad spec cannot
-        # leave an empty people.xml part behind.
+        # Validate everything before touching the package or the cached
+        # tree, so a bad spec cannot leave a part or half-built entry behind.
         normalized: Optional[tuple[str, str]] = None
         if presence:
             normalized = self._normalize_presence(presence)
+            validate_xml_text(normalized[0], "presence provider_id")
+            validate_xml_text(normalized[1], "presence user_id")
 
         person_elem = self._find_person_elem(author)
         if person_elem is None:
+            # Build detached and attach only when complete.
+            new_elem = etree.Element(_qn(NS_W15, "person"))
+            new_elem.set(_qn(NS_W15, "author"), author)
+            if normalized:
+                presence_elem = etree.SubElement(new_elem, _qn(NS_W15, "presenceInfo"))
+                presence_elem.set(_qn(NS_W15, "providerId"), normalized[0])
+                presence_elem.set(_qn(NS_W15, "userId"), normalized[1])
             self.ensure_exists()
-            person_elem = etree.SubElement(self.xml, _qn(NS_W15, "person"))
-            person_elem.set(_qn(NS_W15, "author"), author)
-
-        if normalized:
-            provider_id, user_id = normalized
+            self.xml.append(new_elem)
+            person_elem = new_elem
+        elif normalized:
             presence_elem = self._find_child_by_localname(person_elem, "presenceInfo")
             if presence_elem is None:
                 presence_elem = etree.SubElement(person_elem, _qn(NS_W15, "presenceInfo"))
-            presence_elem.set(_qn(NS_W15, "providerId"), provider_id)
-            presence_elem.set(_qn(NS_W15, "userId"), user_id)
+            presence_elem.set(_qn(NS_W15, "providerId"), normalized[0])
+            presence_elem.set(_qn(NS_W15, "userId"), normalized[1])
 
         self._save()
         return self._person_info_from_elem(person_elem)

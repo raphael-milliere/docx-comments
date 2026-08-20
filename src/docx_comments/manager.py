@@ -22,7 +22,11 @@ from docx_comments.xml_parts import (
     PeoplePart,
     ensure_comment_parts,
     ensure_mc_ignorable,
+    validate_xml_text,
 )
+
+# Backwards-compatible alias: this helper used to live in this module.
+_validate_xml_text = validate_xml_text
 
 if TYPE_CHECKING:
     from docx.document import Document
@@ -82,19 +86,6 @@ def _parse_comment_date(date_str: Optional[str]) -> Optional[datetime]:
         return parsed.astimezone(timezone.utc)
     except ValueError:
         return None
-
-
-def _validate_xml_text(value: Optional[str], what: str) -> None:
-    """Raise a clear ValueError when a string cannot be stored in XML."""
-    if value is None:
-        return
-    probe = etree.Element("probe")
-    try:
-        probe.text = value
-    except ValueError as exc:
-        raise ValueError(
-            f"{what} contains characters not allowed in XML: {exc}"
-        ) from exc
 
 
 def _coerce_comment_id(comment_id: Union[int, str]) -> str:
@@ -890,9 +881,11 @@ class CommentManager:
         if person_author != author:
             raise ValueError("person author must match comment author to link identity")
 
+        _validate_xml_text(person_author, "person author")
         if presence is not None:
-            # Validate presence contents now, not at apply time.
-            PeoplePart._normalize_presence(presence)
+            provider_id, user_id = PeoplePart._normalize_presence(presence)
+            _validate_xml_text(provider_id, "presence provider_id")
+            _validate_xml_text(user_id, "presence user_id")
 
         return (person_author, presence)
 
