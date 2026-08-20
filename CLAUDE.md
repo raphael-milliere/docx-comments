@@ -72,6 +72,10 @@ Parts are created lazily on the first mutating operation; read-only use of
 - `models.py` - Data classes (`CommentInfo`, `CommentThread`, `PersonInfo`)
   and the `CommentContent` type aliases for rich comment content
 
+- `system_author.py` - Internal helpers resolving a default author from a
+  DOCX source, the `DOCX_COMMENTS_AUTHOR_DOCX` env var, or system Office
+  identity (macOS/Windows)
+
 ### Key Implementation Details
 
 **ID Generation** (`manager.py`):

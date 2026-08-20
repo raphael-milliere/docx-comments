@@ -835,7 +835,8 @@ class CommentManager:
             PersonInfo if found.
 
         Raises:
-            KeyError: If no matching person is found.
+            PersonNotFoundError: If no matching person is found (a KeyError
+                subclass).
         """
         people_part = PeoplePart(self._document)
         return people_part.get_person(author)
@@ -1119,6 +1120,9 @@ class CommentManager:
                 start_run, the person spec is invalid, only one of
                 start_char/end_char is given, char offsets are mixed with
                 start_run/end_run, or end_char <= start_char.
+            TypeError: If author is neither a str nor a PersonInfo, the
+                person spec is not a bool, str, dict, or PersonInfo, or a
+                run spec in text is not a str or (str, dict) tuple.
             IndexError: If start_run/end_run are out of range, or
                 start_char/end_char fall outside the paragraph's text.
         """
@@ -1224,6 +1228,8 @@ class CommentManager:
         Raises:
             ValueError: If the match is empty, occurs fewer than
                 `occurrence` times, or matches zero characters.
+            TypeError: If author is neither a str nor a PersonInfo (other
+                type errors as add_comment).
         """
         if occurrence < 1:
             raise ValueError("occurrence must be >= 1")
@@ -1425,7 +1431,7 @@ class CommentManager:
             comment_id: Any comment ID within the thread.
 
         Raises:
-            ValueError: If comment not found.
+            CommentNotFoundError: If comment not found.
         """
         self.set_comment_resolved(comment_id, True)
 
@@ -1437,7 +1443,7 @@ class CommentManager:
             comment_id: Any comment ID within the thread.
 
         Raises:
-            ValueError: If comment not found.
+            CommentNotFoundError: If comment not found.
         """
         self.set_comment_resolved(comment_id, False)
 
@@ -1454,7 +1460,7 @@ class CommentManager:
             resolved: True to resolve, False to unresolve.
 
         Raises:
-            ValueError: If comment not found.
+            CommentNotFoundError: If comment not found.
         """
         comment_id = _coerce_comment_id(comment_id)
         if not self._comment_id_exists(comment_id):
@@ -1481,7 +1487,8 @@ class CommentManager:
             comment_id: The comment ID to delete.
 
         Raises:
-            ValueError: If comment not found (checked before any mutation).
+            CommentNotFoundError: If comment not found (checked before any
+                mutation).
         """
         comment_id = _coerce_comment_id(comment_id)
         if not self._comment_id_exists(comment_id):
@@ -1513,7 +1520,8 @@ class CommentManager:
             comment_id: Any comment ID within the thread.
 
         Raises:
-            ValueError: If comment not found (checked before any mutation).
+            CommentNotFoundError: If comment not found (checked before any
+                mutation).
         """
         comment_id = _coerce_comment_id(comment_id)
         if not self._comment_id_exists(comment_id):
@@ -1673,8 +1681,9 @@ class CommentManager:
             end_run: Index of last run to anchor (default: last run).
 
         Raises:
-            ValueError: If comment not found, the comment belongs to a thread
-                with replies, or the paragraph/run indices are invalid.
+            CommentNotFoundError: If comment not found.
+            ValueError: If the comment belongs to a thread with replies, or
+                the paragraph/run indices are invalid.
             IndexError: If start_run/end_run are out of range.
         """
         comment_id = _coerce_comment_id(comment_id)
@@ -1722,8 +1731,9 @@ class CommentManager:
             end_run: Index of last run to anchor (root comment).
 
         Raises:
-            ValueError: If comment not found, or the paragraph/run indices
-                are invalid.
+            CommentNotFoundError: If comment not found.
+            ValueError: If the thread's root has no comment id (the thread
+                cannot be moved), or the paragraph/run indices are invalid.
             IndexError: If start_run/end_run are out of range.
         """
         comment_id = _coerce_comment_id(comment_id)
