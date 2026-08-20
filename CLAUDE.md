@@ -49,9 +49,15 @@ Parts are created lazily on the first mutating operation; read-only use of
 ### Module Structure
 
 - `manager.py` - `CommentManager` class: main public API
-  - `add_comment()`, `reply_to_comment()`, `resolve_comment()`
-  - `list_comments()`, `get_comment_threads()`
+  - `add_comment()`, `add_comment_on_text()`, `reply_to_comment()`, `edit_comment()`
+  - `resolve_comment()`, `unresolve_comment()`, `set_comment_resolved()`
+  - `delete_comment()`, `delete_thread()`, `move_comment()`, `move_thread()`
+  - `list_comments()`, `get_comment_threads()`, `get_comment()`, `get_thread()`
+  - `get_anchored_text()`, `get_comment_paragraph()` - Anchor introspection
   - `get_authors()`, `get_document_author()` - Author introspection
+
+- `exceptions.py` - Typed exceptions: `CommentNotFoundError` (subclasses
+  ValueError + LookupError), `PersonNotFoundError` (subclasses KeyError)
 
 - `xml_parts.py` - Handlers for XML parts
   - `CommentsPart` - Main comments.xml (handles XmlPart vs generic Part serialisation)
@@ -63,7 +69,8 @@ Parts are created lazily on the first mutating operation; read-only use of
   - Inserts `commentRangeStart`, `commentRangeEnd`, `commentReference`
   - Handles empty paragraphs and reply co-location
 
-- `models.py` - Data classes: `CommentInfo`, `CommentThread`
+- `models.py` - Data classes (`CommentInfo`, `CommentThread`, `PersonInfo`)
+  and the `CommentContent` type aliases for rich comment content
 
 ### Key Implementation Details
 
@@ -98,10 +105,22 @@ helpers (`part_element` / `sync_part_blob`) for footnotes/endnotes parts.
 
 ## Testing Notes
 
-Tests use `tmp_path` fixture for save/reload verification. Coverage by file:
+Tests use `tmp_path` fixture for save/reload verification. `tests/conftest.py`
+keeps the suite hermetic: an autouse fixture clears `DOCX_COMMENTS_AUTHOR_DOCX`
+and stubs the system Office author lookup so no test depends on the
+developer's machine. Coverage by file:
 - `tests/test_manager_basic.py` — manager init, add/resolve, thread grouping
 - `tests/test_threads.py` — replies (incl. reply-to-reply, tables, headers)
 - `tests/test_editing.py` — delete/move/unresolve lifecycle
+- `tests/test_api_polish.py` — typed exceptions, int comment-id acceptance,
+  plain-str authors
+- `tests/test_read_api.py` — `get_comment`/`get_thread`/`get_comment_paragraph`/
+  `get_anchored_text`
+- `tests/test_char_anchoring.py` — `start_char`/`end_char` spans, run
+  splitting, `add_comment_on_text`
+- `tests/test_rich_content.py` — formatted runs, multi-paragraph content
+- `tests/test_timestamps.py` — caller-controlled timestamps, date parsing
+- `tests/test_system_author.py` — system/default author resolution helpers
 - `tests/test_migration.py` — metadata backfill
 - `tests/test_xml.py` — Word Online compatibility (XML structure via zipfile)
 - `tests/test_models.py`, `tests/test_people.py` — models and people.xml
