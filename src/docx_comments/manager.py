@@ -1018,10 +1018,10 @@ class CommentManager:
         initials: Optional[str] = None,
         start_run: int = 0,
         end_run: Optional[int] = None,
-        start_char: Optional[int] = None,
-        end_char: Optional[int] = None,
         person: Optional[PersonSpec] = None,
         timestamp: Optional[datetime] = None,
+        start_char: Optional[int] = None,
+        end_char: Optional[int] = None,
     ) -> str:
         """
         Add a new anchored comment to a paragraph.
@@ -1062,8 +1062,11 @@ class CommentManager:
         Raises:
             ValueError: If the paragraph belongs to another document, the
                 text contains characters not allowed in XML, end_run precedes
-                start_run, or the person spec is invalid.
-            IndexError: If start_run/end_run are out of range.
+                start_run, the person spec is invalid, only one of
+                start_char/end_char is given, char offsets are mixed with
+                start_run/end_run, or end_char <= start_char.
+            IndexError: If start_run/end_run are out of range, or
+                start_char/end_char fall outside the paragraph's text.
         """
         # Validate everything before mutating anything.
         author_name, author_presence = self._parse_author_spec(author)

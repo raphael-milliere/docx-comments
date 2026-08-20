@@ -321,6 +321,10 @@ class CommentAnchor:
             if skip:
                 continue
             for child in run:
+                # Non-element nodes (XML comments/PIs) have a non-string tag
+                # and would make QName raise.
+                if not isinstance(child.tag, str):
+                    continue
                 local = etree.QName(child).localname
                 if local == "t":
                     yield child, run, len(child.text or ""), True
