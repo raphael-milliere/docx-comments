@@ -1,11 +1,16 @@
-# docx-comments
+# python-docx-comments
 
-[![PyPI version](https://badge.fury.io/py/docx-comments.svg)](https://pypi.org/project/docx-comments/)
-[![Python versions](https://img.shields.io/pypi/pyversions/docx-comments.svg)](https://pypi.org/project/docx-comments/)
-[![CI](https://github.com/sunt05/docx-comments/actions/workflows/ci.yml/badge.svg)](https://github.com/sunt05/docx-comments/actions/workflows/ci.yml)
+[![PyPI version](https://badge.fury.io/py/python-docx-comments.svg)](https://pypi.org/project/python-docx-comments/)
+[![Python versions](https://img.shields.io/pypi/pyversions/python-docx-comments.svg)](https://pypi.org/project/python-docx-comments/)
+[![CI](https://github.com/raphael-milliere/docx-comments/actions/workflows/ci.yml/badge.svg)](https://github.com/raphael-milliere/docx-comments/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Python module for complete Word document comment manipulation - adding, replying, editing, and resolving comments with full Word Online compatibility.
+Python module for complete Word document comment manipulation - adding, replying, editing, and resolving comments with full Word Online compatibility. Installed as `python-docx-comments`, imported as `docx_comments`.
+
+> **Note:** this is the actively maintained fork of
+> [sunt05/docx-comments](https://github.com/sunt05/docx-comments), published
+> under a new PyPI name. The legacy `docx-comments` package on PyPI (0.3.0)
+> predates important id-generation fixes and should not be used.
 
 ## Problem
 
@@ -38,7 +43,7 @@ This module provides complete OOXML comment manipulation based on ECMA-376 / ISO
 ## Installation
 
 ```bash
-pip install docx-comments
+pip install python-docx-comments
 ```
 
 ## Usage
@@ -341,7 +346,7 @@ Parts are created lazily: a `CommentManager` used only for reading
 
 ## Acknowledgements
 
-This project was conceptualised by [Ting Sun](https://github.com/sunt05) and implemented with the assistance of [Claude Code](https://claude.ai/code) (Anthropic's AI coding assistant) under his guidance. The collaboration involved iterative development of the OOXML comment handling logic, with Claude Code contributing to code implementation and Ting Sun providing architectural direction and domain expertise.
+This project was conceptualised by [Ting Sun](https://github.com/sunt05) and implemented with the assistance of [Claude Code](https://claude.ai/code) (Anthropic's AI coding assistant) under his guidance. The collaboration involved iterative development of the OOXML comment handling logic, with Claude Code contributing to code implementation and Ting Sun providing architectural direction and domain expertise. This fork is maintained by [Raphaël Millière](https://github.com/raphael-milliere) and published on PyPI as `python-docx-comments`.
 
 ## License
 

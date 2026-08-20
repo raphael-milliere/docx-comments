@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Distribution renamed to `python-docx-comments` (import name unchanged:
+  `docx_comments`); published from the maintained fork
+  [raphael-milliere/docx-comments](https://github.com/raphael-milliere/docx-comments).
+  The legacy `docx-comments` package on PyPI stops at 0.3.0 and lacks the
+  0.4.0 id-generation fixes
 - `resolve`/`delete` operations skip the full metadata migration scan when
   satellite parts are already complete (large-document batch performance)
 
@@ -155,9 +160,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `commentsExtended.xml` - Threading (paraId, paraIdParent, done)
   - `commentsIds.xml` - Durable IDs
 
-[0.5.0]: https://github.com/sunt05/docx-comments/compare/v0.4.0...HEAD
-[0.4.0]: https://github.com/sunt05/docx-comments/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/sunt05/docx-comments/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/sunt05/docx-comments/compare/v0.1.1...v0.2.0
-[0.1.1]: https://github.com/sunt05/docx-comments/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/sunt05/docx-comments/releases/tag/v0.1.0
+[0.5.0]: https://github.com/raphael-milliere/docx-comments/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/raphael-milliere/docx-comments/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/raphael-milliere/docx-comments/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/raphael-milliere/docx-comments/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/raphael-milliere/docx-comments/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/raphael-milliere/docx-comments/releases/tag/v0.1.0

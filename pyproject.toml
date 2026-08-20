@@ -1,11 +1,14 @@
 [project]
-name = "docx-comments"
+name = "python-docx-comments"
 dynamic = ["version"]
 description = "Complete Word document comment manipulation with threading and Word Online compatibility"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
     {name = "Ting Sun", email = "ting.sun@ucl.ac.uk"}
+]
+maintainers = [
+    {name = "Raphaël Millière", email = "contact@raphaelmilliere.com"}
 ]
 requires-python = ">=3.9"
 classifiers = [
@@ -38,9 +41,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/sunt05/docx-comments"
-Repository = "https://github.com/sunt05/docx-comments"
-Issues = "https://github.com/sunt05/docx-comments/issues"
+Homepage = "https://github.com/raphael-milliere/docx-comments"
+Repository = "https://github.com/raphael-milliere/docx-comments"
+Issues = "https://github.com/raphael-milliere/docx-comments/issues"
+Changelog = "https://github.com/raphael-milliere/docx-comments/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
