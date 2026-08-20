@@ -4,7 +4,7 @@
     {
       "id": 0,
       "subject": "Task 0: Branch + CONTRIBUTING fixes",
-      "status": "pending",
+      "status": "completed",
       "description": "**Goal:** Create branch audit-improvements; fix stale CONTRIBUTING test path and lint scope.\n\n**Files:**\n- CONTRIBUTING.md\n\n**Acceptance Criteria:**\n- [ ] branch audit-improvements exists\n- [ ] no test_basic.py reference remains\n- [ ] lint commands cover src/ and tests/\n\n**Verify:** git branch --show-current; grep -c test_basic.py CONTRIBUTING.md -> 0\n\nFull steps with code: docs/superpowers/plans/2026-08-20-audit-improvements.md (same task number).\n\n```json:metadata\n{\"files\": [\"CONTRIBUTING.md\"], \"verifyCommand\": \"grep -c test_basic.py CONTRIBUTING.md; git branch --show-current\", \"acceptanceCriteria\": [\"branch audit-improvements exists\", \"no test_basic.py reference remains\", \"lint commands cover src/ and tests/\"], \"modelTier\": \"mechanical\"}\n```"
     },
     {
@@ -170,5 +170,5 @@
       ]
     }
   ],
-  "lastUpdated": "2026-08-20T00:00:00Z"
+  "lastUpdated": "2026-08-20T00:12:00Z"
 }

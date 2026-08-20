@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Optional, Union
 from lxml import etree
 
 from docx_comments.anchors import CommentAnchor
+from docx_comments.exceptions import CommentNotFoundError
 from docx_comments.models import CommentInfo, CommentThread, PersonInfo
 from docx_comments.system_author import _default_person_from_system
 from docx_comments.xml_parts import (
@@ -93,6 +94,19 @@ def _validate_xml_text(value: Optional[str], what: str) -> None:
         raise ValueError(
             f"{what} contains characters not allowed in XML: {exc}"
         ) from exc
+
+
+def _coerce_comment_id(comment_id: Union[int, str]) -> str:
+    """Accept python-docx native int ids alongside this library's str ids."""
+    if isinstance(comment_id, bool):
+        raise TypeError("comment_id must be a str or int, not bool")
+    if isinstance(comment_id, int):
+        return str(comment_id)
+    if not isinstance(comment_id, str):
+        raise TypeError(
+            f"comment_id must be a str or int, got {type(comment_id).__name__}"
+        )
+    return comment_id
 
 
 class CommentManager:
@@ -243,7 +257,7 @@ class CommentManager:
         self,
     ) -> tuple[list[CommentInfo], dict[str, CommentInfo], dict[str, CommentInfo]]:
         comments = list(self.list_comments())
-        by_id = {c.comment_id: c for c in comments}
+        by_id = {c.comment_id: c for c in comments if c.comment_id is not None}
         by_para_id = {c.para_id: c for c in comments if c.para_id}
         return comments, by_id, by_para_id
 
@@ -269,7 +283,7 @@ class CommentManager:
         comments, by_id, by_para_id = self._comment_index()
         target = by_id.get(comment_id)
         if target is None:
-            raise ValueError(f"Comment {comment_id} not found")
+            raise CommentNotFoundError(f"Comment {comment_id} not found")
         root = self._root_for(target, by_para_id)
         root_key = self._thread_key(root)
         return [
@@ -986,7 +1000,7 @@ class CommentManager:
 
     def reply_to_comment(
         self,
-        parent_id: str,
+        parent_id: Union[int, str],
         text: str,
         author: PersonInfo,
         initials: Optional[str] = None,
@@ -1007,8 +1021,14 @@ class CommentManager:
             The comment ID of the reply.
 
         Raises:
-            ValueError: If parent comment not found.
+            CommentNotFoundError: If the parent comment is not found.
+            TypeError: If author is not a PersonInfo (or str once Task 12
+                lands) or parent_id is neither str nor int.
+            ValueError: If the text/author/initials contain characters not
+                allowed in XML, the person spec is invalid, or the parent
+                comment has no anchors in the document.
         """
+        parent_id = _coerce_comment_id(parent_id)
         author_name, author_presence = self._parse_author_spec(author)
         _validate_xml_text(text, "comment text")
         _validate_xml_text(author_name, "author")
@@ -1024,7 +1044,7 @@ class CommentManager:
         # Validate the parent id before mutating anything (including the
         # metadata migration below).
         if not self._comment_id_exists(parent_id):
-            raise ValueError(f"Parent comment {parent_id} not found")
+            raise CommentNotFoundError(f"Parent comment {parent_id} not found")
 
         self._ensure_parts()
 
@@ -1039,7 +1059,7 @@ class CommentManager:
             comments = list(self.list_comments())
             parent_comment = next((c for c in comments if c.comment_id == parent_id), None)
             if parent_comment is None or not parent_comment.para_id:
-                raise ValueError(f"Parent comment {parent_id} not found")
+                raise CommentNotFoundError(f"Parent comment {parent_id} not found")
 
         parent_para_id = parent_comment.para_id
         parent_parent_para_id = parent_comment.parent_para_id
@@ -1118,7 +1138,7 @@ class CommentManager:
 
         return comment_id
 
-    def resolve_comment(self, comment_id: str) -> None:
+    def resolve_comment(self, comment_id: Union[int, str]) -> None:
         """
         Mark a comment's thread as resolved.
 
@@ -1133,7 +1153,7 @@ class CommentManager:
         """
         self.set_comment_resolved(comment_id, True)
 
-    def unresolve_comment(self, comment_id: str) -> None:
+    def unresolve_comment(self, comment_id: Union[int, str]) -> None:
         """
         Mark a comment's thread as unresolved (thread-scoped, like Word).
 
@@ -1145,7 +1165,7 @@ class CommentManager:
         """
         self.set_comment_resolved(comment_id, False)
 
-    def set_comment_resolved(self, comment_id: str, resolved: bool) -> None:
+    def set_comment_resolved(self, comment_id: Union[int, str], resolved: bool) -> None:
         """
         Set the resolved status for a comment's thread.
 
@@ -1160,8 +1180,9 @@ class CommentManager:
         Raises:
             ValueError: If comment not found.
         """
+        comment_id = _coerce_comment_id(comment_id)
         if not self._comment_id_exists(comment_id):
-            raise ValueError(f"Comment {comment_id} not found")
+            raise CommentNotFoundError(f"Comment {comment_id} not found")
 
         self.migrate_comment_metadata()
 
@@ -1172,7 +1193,7 @@ class CommentManager:
             if comment.para_id and comment.para_id in threading:
                 ext_part.set_done(comment.para_id, done=resolved)
 
-    def delete_comment(self, comment_id: str) -> None:
+    def delete_comment(self, comment_id: Union[int, str]) -> None:
         """
         Delete a single comment.
 
@@ -1185,8 +1206,9 @@ class CommentManager:
         Raises:
             ValueError: If comment not found (checked before any mutation).
         """
+        comment_id = _coerce_comment_id(comment_id)
         if not self._comment_id_exists(comment_id):
-            raise ValueError(f"Comment {comment_id} not found")
+            raise CommentNotFoundError(f"Comment {comment_id} not found")
 
         self.migrate_comment_metadata()
 
@@ -1205,7 +1227,7 @@ class CommentManager:
         self._cleanup_orphan_metadata(remaining_para_ids)
         self._detach_orphan_replies(remaining_para_ids)
 
-    def delete_thread(self, comment_id: str) -> None:
+    def delete_thread(self, comment_id: Union[int, str]) -> None:
         """
         Delete an entire comment thread (root + replies).
 
@@ -1215,8 +1237,9 @@ class CommentManager:
         Raises:
             ValueError: If comment not found (checked before any mutation).
         """
+        comment_id = _coerce_comment_id(comment_id)
         if not self._comment_id_exists(comment_id):
-            raise ValueError(f"Comment {comment_id} not found")
+            raise CommentNotFoundError(f"Comment {comment_id} not found")
 
         self.migrate_comment_metadata()
         thread_comments = self._thread_comments_for(comment_id)
@@ -1246,7 +1269,7 @@ class CommentManager:
 
     def move_comment(
         self,
-        comment_id: str,
+        comment_id: Union[int, str],
         paragraph: Paragraph,
         start_run: int = 0,
         end_run: Optional[int] = None,
@@ -1269,9 +1292,10 @@ class CommentManager:
                 with replies, or the paragraph/run indices are invalid.
             IndexError: If start_run/end_run are out of range.
         """
+        comment_id = _coerce_comment_id(comment_id)
         _, by_id, _ = self._comment_index()
         if comment_id not in by_id:
-            raise ValueError(f"Comment {comment_id} not found")
+            raise CommentNotFoundError(f"Comment {comment_id} not found")
 
         thread_comments = self._thread_comments_for(comment_id)
         if len({c.comment_id for c in thread_comments if c.comment_id}) > 1:
@@ -1297,7 +1321,7 @@ class CommentManager:
 
     def move_thread(
         self,
-        comment_id: str,
+        comment_id: Union[int, str],
         paragraph: Paragraph,
         start_run: int = 0,
         end_run: Optional[int] = None,
@@ -1317,6 +1341,7 @@ class CommentManager:
                 are invalid.
             IndexError: If start_run/end_run are out of range.
         """
+        comment_id = _coerce_comment_id(comment_id)
         thread_comments = self._thread_comments_for(comment_id)
         by_para_id = {c.para_id: c for c in thread_comments if c.para_id}
         target = next(
@@ -1324,7 +1349,7 @@ class CommentManager:
             None,
         )
         if target is None:
-            raise ValueError(f"Comment {comment_id} not found")
+            raise CommentNotFoundError(f"Comment {comment_id} not found")
         root = self._root_for(target, by_para_id)
         if not root.comment_id:
             raise ValueError(

@@ -10,6 +10,7 @@ from docx.opc.packuri import PackURI
 from docx.opc.part import Part
 from lxml import etree
 
+from docx_comments.exceptions import PersonNotFoundError
 from docx_comments.models import PersonInfo
 
 if TYPE_CHECKING:
@@ -675,7 +676,7 @@ class PeoplePart(_BasePartHandler):
             raise ValueError("author must be non-empty")
         elem = self._find_person_elem(author)
         if elem is None:
-            raise KeyError(f"person '{author}' not found")
+            raise PersonNotFoundError(f"person '{author}' not found")
         return self._person_info_from_elem(elem)
 
     @staticmethod

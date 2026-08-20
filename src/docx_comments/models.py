@@ -9,11 +9,13 @@ from typing import Optional
 class CommentInfo:
     """Information about a single comment."""
 
-    comment_id: str
-    """Unique comment ID (w:id attribute)."""
+    comment_id: Optional[str]
+    """Unique comment ID (w:id attribute). None for schema-invalid comments
+    that lack w:id (the library still lists them)."""
 
     para_id: str
-    """Paragraph ID linking to extended/ids parts (w14:paraId)."""
+    """Paragraph ID linking to extended/ids parts (w14:paraId). Empty string
+    ("") when the comment has no identifiable paragraph id."""
 
     text: str
     """Comment text content."""
