@@ -642,6 +642,60 @@ class CommentManager:
 
         return list(threads_by_root.values())
 
+    def get_comment(self, comment_id: Union[int, str]) -> CommentInfo:
+        """Return the CommentInfo for a single comment.
+
+        Raises:
+            CommentNotFoundError: If no comment has this id.
+        """
+        comment_id = _coerce_comment_id(comment_id)
+        _, by_id, _ = self._comment_index()
+        info = by_id.get(comment_id)
+        if info is None:
+            raise CommentNotFoundError(f"Comment {comment_id} not found")
+        return info
+
+    def get_thread(self, comment_id: Union[int, str]) -> CommentThread:
+        """Return the thread containing a comment (root or reply).
+
+        Raises:
+            CommentNotFoundError: If no comment has this id.
+        """
+        comment_id = _coerce_comment_id(comment_id)
+        for thread in self.get_comment_threads():
+            if any(c.comment_id == comment_id for c in thread.all_comments):
+                return thread
+        raise CommentNotFoundError(f"Comment {comment_id} not found")
+
+    def get_comment_paragraph(
+        self, comment_id: Union[int, str]
+    ) -> Optional[Paragraph]:
+        """Paragraph containing the comment's anchor.
+
+        Returns None when the comment exists but has no range anchors.
+
+        Raises:
+            CommentNotFoundError: If no comment has this id.
+        """
+        comment_id = _coerce_comment_id(comment_id)
+        if not self._comment_id_exists(comment_id):
+            raise CommentNotFoundError(f"Comment {comment_id} not found")
+        return CommentAnchor(self._document).find_paragraph_with_comment(comment_id)
+
+    def get_anchored_text(self, comment_id: Union[int, str]) -> Optional[str]:
+        """The document text the comment is anchored to.
+
+        Returns None when the comment has no commentRangeStart/End pair
+        (reference-only or anchor-less comments).
+
+        Raises:
+            CommentNotFoundError: If no comment has this id.
+        """
+        comment_id = _coerce_comment_id(comment_id)
+        if not self._comment_id_exists(comment_id):
+            raise CommentNotFoundError(f"Comment {comment_id} not found")
+        return CommentAnchor(self._document).get_anchored_text(comment_id)
+
     def get_authors(self) -> dict[str, str]:
         """
         Get all unique authors who have commented on this document.

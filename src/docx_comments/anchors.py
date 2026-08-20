@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 # OOXML Namespace
 NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 
 REL_FOOTNOTES = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes"
 REL_ENDNOTES = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes"
@@ -612,6 +613,62 @@ class CommentAnchor:
             parent = parent.getparent()
 
         return None
+
+    @staticmethod
+    def _in_fallback(elem: etree._Element) -> bool:
+        parent = elem.getparent()
+        fallback = _qn(NS_MC, "Fallback")
+        while parent is not None:
+            if parent.tag == fallback:
+                return True
+            parent = parent.getparent()
+        return False
+
+    def get_anchored_text(self, comment_id: str) -> Optional[str]:
+        """Text between a comment's range markers, in document order.
+
+        Mirrors the extraction rules of comment-text reading: w:t text,
+        w:br/w:cr as newline, w:tab as tab, mc:Fallback content skipped,
+        and a newline when the range crosses a paragraph boundary.
+        Returns None when the comment has no commentRangeStart/End pair.
+        """
+        _, start, end, _ = self._find_anchor_elements(comment_id)
+        if start is None or end is None:
+            return None
+        root = start.getroottree().getroot()
+        p_tag = _qn(NS_W, "p")
+        r_tag = _qn(NS_W, "r")
+        start_in_paragraph = self._has_paragraph_ancestor(start)
+        pieces: list[str] = []
+        active = False
+        paras_seen = 0
+        for elem in root.iter():
+            if elem is start:
+                active = True
+                continue
+            if elem is end:
+                break
+            if not active:
+                continue
+            if elem.tag == p_tag:
+                if paras_seen > 0 or start_in_paragraph:
+                    pieces.append("\n")
+                paras_seen += 1
+                continue
+            parent = elem.getparent()
+            if parent is None or parent.tag != r_tag:
+                continue  # e.g. w:tab inside w:pPr/w:tabs
+            if self._in_fallback(elem):
+                continue
+            local = etree.QName(elem).localname
+            if local == "t":
+                if elem.text:
+                    pieces.append(elem.text)
+            elif local in ("br", "cr"):
+                pieces.append("\n")
+            elif local == "tab":
+                pieces.append("\t")
+        return "".join(pieces)
 
     def remove_anchors(self, comment_id: str) -> None:
         """
