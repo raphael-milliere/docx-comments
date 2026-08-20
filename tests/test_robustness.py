@@ -1512,3 +1512,24 @@ class TestBlockLevelAnchors:
             last_cell_para._element.find(f".//{qn(NS_W, 'commentReference')}")
             is not None
         )
+
+
+class TestParentChainCycle:
+    """A paraIdParent cycle (foreign/corrupt metadata) must not hang."""
+
+    def test_cycle_terminates(self):
+        doc = Document()
+        p1 = doc.add_paragraph("one")
+        p2 = doc.add_paragraph("two")
+        mgr = CommentManager(doc)
+        c1 = mgr.add_comment(p1, "a", PersonInfo(author="A"))
+        c2 = mgr.add_comment(p2, "b", PersonInfo(author="B"))
+        pid1 = mgr.get_comment(c1).para_id
+        pid2 = mgr.get_comment(c2).para_id
+        ext = CommentsExtendedPart(doc)
+        ext.set_parent(pid1, pid2)
+        ext.set_parent(pid2, pid1)
+        threads = mgr.get_comment_threads()
+        total = sum(len(t.all_comments) for t in threads)
+        assert total == 2
+        mgr.resolve_comment(c1)  # must terminate

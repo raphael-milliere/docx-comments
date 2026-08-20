@@ -119,3 +119,38 @@ class TestCommentManagerBasic:
         thread_with_replies = next(t for t in threads if t.reply_count > 0)
         assert thread_with_replies.root.text == "Comment 1"
         assert thread_with_replies.reply_count == 2
+
+
+class TestAuthorGetters:
+    """Tests for get_authors and get_document_author."""
+
+    def test_get_authors_prefers_non_empty_initials(self):
+        doc = Document()
+        p1 = doc.add_paragraph("one")
+        p2 = doc.add_paragraph("two")
+        mgr = CommentManager(doc)
+        mgr.add_comment(p1, "a", PersonInfo(author="Alice"))
+        mgr.add_comment(p2, "b", PersonInfo(author="Alice"), initials="AL")
+        assert mgr.get_authors() == {"Alice": "AL"}
+
+    def test_get_document_author_with_initials_lookup(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        doc.core_properties.author = "Alice"
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="Alice"), initials="AL")
+        assert mgr.get_document_author() == ("Alice", "AL")
+
+    def test_get_document_author_last_modified_fallback(self):
+        doc = Document()
+        doc.core_properties.author = ""
+        doc.core_properties.last_modified_by = "Bob"
+        mgr = CommentManager(doc)
+        assert mgr.get_document_author() == ("Bob", None)
+
+    def test_get_document_author_empty(self):
+        doc = Document()
+        doc.core_properties.author = ""
+        doc.core_properties.last_modified_by = ""
+        mgr = CommentManager(doc)
+        assert mgr.get_document_author() == ("", None)

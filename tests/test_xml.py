@@ -36,6 +36,7 @@ class TestWordOnlineCompatibility:
             assert "word/comments.xml" in names
             assert "word/commentsExtended.xml" in names
             assert "word/commentsIds.xml" in names
+            assert "word/commentsExtensible.xml" in names
 
     def test_comments_xml_structure(self, tmp_path):
         """Test comments.xml has correct structure."""
@@ -266,3 +267,37 @@ def test_comments_xml_declares_mc_ignorable(tmp_path):
     ns_mc = "http://schemas.openxmlformats.org/markup-compatibility/2006"
     ignorable = root.get(f"{{{ns_mc}}}Ignorable")
     assert ignorable is not None and "w14" in ignorable.split()
+
+
+def test_extensible_linked_by_durable_id_with_utc_date(tmp_path):
+    from datetime import timezone
+
+    from docx_comments.manager import _parse_comment_date
+
+    doc = Document()
+    para = doc.add_paragraph("text")
+    mgr = CommentManager(doc)
+    mgr.add_comment(para, "c", PersonInfo(author="A"))
+    path = tmp_path / "x.docx"
+    doc.save(str(path))
+    ns_w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    ns_cid = "http://schemas.microsoft.com/office/word/2016/wordml/cid"
+    ns_cex = "http://schemas.microsoft.com/office/word/2018/wordml/cex"
+    with zipfile.ZipFile(path) as zf:
+        ids_root = etree.fromstring(zf.read("word/commentsIds.xml"))
+        cex_root = etree.fromstring(zf.read("word/commentsExtensible.xml"))
+        comments_root = etree.fromstring(zf.read("word/comments.xml"))
+    durable_ids = {
+        e.get(f"{{{ns_cid}}}durableId")
+        for e in ids_root
+        if etree.QName(e).localname == "commentId"
+    }
+    cex_entries = {
+        e.get(f"{{{ns_cex}}}durableId"): e.get(f"{{{ns_cex}}}dateUtc")
+        for e in cex_root
+        if etree.QName(e).localname == "commentExtensible"
+    }
+    assert durable_ids and durable_ids == set(cex_entries)
+    w_date = comments_root.find(f"{{{ns_w}}}comment").get(f"{{{ns_w}}}date")
+    expected = _parse_comment_date(w_date).astimezone(timezone.utc)
+    assert list(cex_entries.values())[0] == expected.strftime("%Y-%m-%dT%H:%M:%SZ")
