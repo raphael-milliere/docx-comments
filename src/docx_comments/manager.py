@@ -1126,10 +1126,14 @@ class CommentManager:
                 parent_para_id=effective_parent_parent_para_id,
                 done=False,
             )
+        # The reply inherits the thread's current resolution state so a
+        # resolved thread stays consistently resolved (Word keeps all
+        # members' done flags in sync).
+        inherited_done = threading.get(effective_parent_para_id, {}).get("done", False)
         ext_part.add_comment_ex(
             para_id=para_id,
             parent_para_id=effective_parent_para_id,
-            done=False,
+            done=inherited_done,
         )
 
         # 4. Add to commentsIds.xml

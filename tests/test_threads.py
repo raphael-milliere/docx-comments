@@ -127,3 +127,27 @@ class TestCommentThreads:
         reply2 = next(c for c in comments if c.text == "Body reply 2")
         root = next(c for c in comments if c.text == "Root body")
         assert reply2.parent_para_id == root.para_id
+
+
+def test_reply_into_resolved_thread_inherits_done():
+    doc = Document()
+    para = doc.add_paragraph("text")
+    mgr = CommentManager(doc)
+    cid = mgr.add_comment(para, "root", PersonInfo(author="A"))
+    mgr.resolve_comment(cid)
+    mgr.reply_to_comment(cid, "late reply", PersonInfo(author="B"))
+    comments = list(mgr.list_comments())
+    assert all(c.is_resolved for c in comments), (
+        "reply into a resolved thread must inherit done=1"
+    )
+    thread = mgr.get_comment_threads()[0]
+    assert thread.is_resolved
+
+
+def test_reply_into_open_thread_stays_unresolved():
+    doc = Document()
+    para = doc.add_paragraph("text")
+    mgr = CommentManager(doc)
+    cid = mgr.add_comment(para, "root", PersonInfo(author="A"))
+    mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+    assert not any(c.is_resolved for c in mgr.list_comments())
