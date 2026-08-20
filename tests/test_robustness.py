@@ -294,6 +294,92 @@ class TestAnchorValidation:
         assert localnames.index("hyperlink") < localnames.index("commentRangeEnd")
 
 
+def _append_hyperlink(para, text):
+    hyperlink = etree.SubElement(para._element, qn(NS_W, "hyperlink"))
+    run = etree.SubElement(hyperlink, qn(NS_W, "r"))
+    t = etree.SubElement(run, qn(NS_W, "t"))
+    t.text = text
+    return hyperlink
+
+
+class TestMixedContentAnchors:
+    def _child_locals(self, para):
+        return [etree.QName(c).localname for c in para._element]
+
+    def test_run_then_hyperlink_default_anchor_covers_all(self):
+        doc = Document()
+        para = doc.add_paragraph()
+        para.add_run("See ")
+        _append_hyperlink(para, "the link")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        locals_ = self._child_locals(para)
+        assert locals_.index("commentRangeEnd") > locals_.index("hyperlink"), (
+            f"anchor truncated before the hyperlink: {locals_}"
+        )
+
+    def test_hyperlink_then_run_default_anchor_covers_all(self):
+        doc = Document()
+        para = doc.add_paragraph()
+        _append_hyperlink(para, "the link")
+        para.add_run(" trailing")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        locals_ = self._child_locals(para)
+        assert locals_.index("commentRangeStart") < locals_.index("hyperlink")
+
+    def test_tracked_change_wrapper_covered(self):
+        doc = Document()
+        para = doc.add_paragraph()
+        ins = etree.SubElement(para._element, qn(NS_W, "ins"))
+        run = etree.SubElement(ins, qn(NS_W, "r"))
+        t = etree.SubElement(run, qn(NS_W, "t"))
+        t.text = "inserted"
+        para.add_run(" kept")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        locals_ = self._child_locals(para)
+        assert locals_.index("commentRangeStart") < locals_.index("ins")
+
+    def test_explicit_indices_still_address_direct_runs(self):
+        doc = Document()
+        para = doc.add_paragraph()
+        para.add_run("one")
+        _append_hyperlink(para, "link")
+        para.add_run("two")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"), start_run=0, end_run=0)
+        children = list(para._element)
+        end_idx = next(
+            i for i, c in enumerate(children)
+            if etree.QName(c).localname == "commentRangeEnd"
+        )
+        hyper_idx = next(
+            i for i, c in enumerate(children)
+            if etree.QName(c).localname == "hyperlink"
+        )
+        assert end_idx < hyper_idx, "explicit run indices must not span containers"
+
+    def test_reference_run_carries_comment_reference_style(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        ref = para._element.find(f".//{qn(NS_W, 'commentReference')}")
+        ref_run = ref.getparent()
+        style = ref_run.find(f"{qn(NS_W, 'rPr')}/{qn(NS_W, 'rStyle')}")
+        assert style is not None and style.get(qn(NS_W, "val")) == "CommentReference"
+
+    def test_styled_reference_run_still_removed_on_delete(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"))
+        mgr.delete_comment(cid)
+        assert para._element.find(f".//{qn(NS_W, 'commentReference')}") is None
+        assert para._element.find(qn(NS_W, "r")) is not None  # text run kept
+
+
 class TestAnchorRemoval:
     def test_word_style_reference_run_fully_removed(self):
         doc = Document()

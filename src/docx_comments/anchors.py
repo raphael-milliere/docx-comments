@@ -49,6 +49,17 @@ _RUN_CONTAINER_TAGS = frozenset(
 )
 
 
+def _make_reference_run(comment_id: str) -> etree._Element:
+    """Build Word's styled comment reference run."""
+    ref_run = etree.Element(_qn(NS_W, "r"))
+    rpr = etree.SubElement(ref_run, _qn(NS_W, "rPr"))
+    rstyle = etree.SubElement(rpr, _qn(NS_W, "rStyle"))
+    rstyle.set(_qn(NS_W, "val"), "CommentReference")
+    ref = etree.SubElement(ref_run, _REF_TAG)
+    ref.set(_ID_ATTR, comment_id)
+    return ref_run
+
+
 class CommentAnchor:
     """Handler for comment anchors in document.xml."""
 
@@ -206,48 +217,50 @@ class CommentAnchor:
         paragraph's direct runs (Python-style negative indices are accepted).
         """
         runs = para_elem.findall(_qn(NS_W, "r"))
+        default_span = start_run == 0 and end_run is None
 
-        if runs:
-            n = len(runs)
-            requested_start, requested_end = start_run, end_run
-            if end_run is None:
-                end_run = n - 1
-            if -n <= start_run < 0:
-                start_run += n
-            if -n <= end_run < 0:
-                end_run += n
-            if not 0 <= start_run < n:
-                raise IndexError(
-                    f"start_run {requested_start} out of range for paragraph with {n} run(s)"
-                )
-            if not 0 <= end_run < n:
-                raise IndexError(
-                    f"end_run {requested_end} out of range for paragraph with {n} run(s)"
-                )
-            if end_run < start_run:
-                raise ValueError(
-                    f"end_run {requested_end} precedes start_run {requested_start}"
-                )
-            return runs[start_run], runs[end_run]
+        if default_span:
+            # Index-free default: span all visible content in document
+            # order, including runs wrapped in hyperlink/tracked-change/
+            # field containers (explicit indices keep addressing direct
+            # runs only, unchanged).
+            anchorable = [
+                child
+                for child in para_elem
+                if child.tag == _qn(NS_W, "r")
+                or etree.QName(child).localname in _RUN_CONTAINER_TAGS
+            ]
+            if anchorable:
+                return anchorable[0], anchorable[-1]
+            return None, None
 
-        # No direct runs: indices cannot address anything, so only the
-        # default whole-paragraph span is valid.
-        if start_run != 0 or end_run is not None:
+        if not runs:
             raise IndexError(
                 "paragraph has no direct runs; omit start_run/end_run to "
                 "anchor the whole paragraph"
             )
 
-        containers = [
-            child
-            for child in para_elem
-            if etree.QName(child).localname in _RUN_CONTAINER_TAGS
-        ]
-        if containers:
-            # Content lives inside hyperlink/tracked-change/etc. wrappers.
-            return containers[0], containers[-1]
-
-        return None, None
+        n = len(runs)
+        requested_start, requested_end = start_run, end_run
+        if end_run is None:
+            end_run = n - 1
+        if -n <= start_run < 0:
+            start_run += n
+        if -n <= end_run < 0:
+            end_run += n
+        if not 0 <= start_run < n:
+            raise IndexError(
+                f"start_run {requested_start} out of range for paragraph with {n} run(s)"
+            )
+        if not 0 <= end_run < n:
+            raise IndexError(
+                f"end_run {requested_end} out of range for paragraph with {n} run(s)"
+            )
+        if end_run < start_run:
+            raise ValueError(
+                f"end_run {requested_end} precedes start_run {requested_start}"
+            )
+        return runs[start_run], runs[end_run]
 
     def validate_anchor_target(
         self,
@@ -356,9 +369,7 @@ class CommentAnchor:
         last.addnext(range_end)
 
         # Insert commentReference run after commentRangeEnd
-        ref_run = etree.Element(_qn(NS_W, "r"))
-        ref = etree.SubElement(ref_run, _REF_TAG)
-        ref.set(_ID_ATTR, comment_id)
+        ref_run = _make_reference_run(comment_id)
         range_end.addnext(ref_run)
 
         # Persist for blob-backed parts (footnotes/endnotes).
@@ -408,9 +419,7 @@ class CommentAnchor:
         range_end.set(_ID_ATTR, comment_id)
 
         # Create commentReference run
-        ref_run = etree.Element(_qn(NS_W, "r"))
-        ref = etree.SubElement(ref_run, _REF_TAG)
-        ref.set(_ID_ATTR, comment_id)
+        ref_run = _make_reference_run(comment_id)
 
         # Insert after pPr if present, else at start
         pPr = para_elem.find(_qn(NS_W, "pPr"))
@@ -465,10 +474,7 @@ class CommentAnchor:
         new_end = etree.Element(_END_TAG)
         new_end.set(_ID_ATTR, new_comment_id)
         target.addnext(new_end)
-        ref_run = etree.Element(_qn(NS_W, "r"))
-        ref = etree.SubElement(ref_run, _REF_TAG)
-        ref.set(_ID_ATTR, new_comment_id)
-        new_end.addnext(ref_run)
+        new_end.addnext(_make_reference_run(new_comment_id))
 
     def add_anchors_at_comment(
         self,
@@ -532,9 +538,7 @@ class CommentAnchor:
         # Place the reference run at a schema-valid run position. A bare run
         # directly under w:body/w:tbl/w:tr/w:tc (block-level ranges) makes
         # document.xml invalid and triggers Word's repair prompt.
-        ref_run = etree.Element(_qn(NS_W, "r"))
-        ref = etree.SubElement(ref_run, _REF_TAG)
-        ref.set(_ID_ATTR, new_comment_id)
+        ref_run = _make_reference_run(new_comment_id)
 
         anchor_after: Optional[etree._Element] = None
         if parent_ref is not None:
