@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`docx-comments` is a Python module for complete Word document comment manipulation. It fills gaps in python-docx by providing:
+`docx_comments` is a Python module for complete Word document comment manipulation (distributed on PyPI as `python-docx-comments`; this repo is the maintained fork of sunt05/docx-comments). It fills gaps in python-docx by providing:
 - Anchored comments with proper OOXML structure
 - Threaded replies
 - Comment resolution (done status)

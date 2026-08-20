@@ -6,7 +6,7 @@ Thank you for your interest in contributing to docx-comments!
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/sunt05/docx-comments.git
+   git clone https://github.com/raphael-milliere/docx-comments.git
    cd docx-comments
    ```
 
