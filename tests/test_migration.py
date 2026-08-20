@@ -4,9 +4,57 @@ from docx import Document
 
 from docx_comments import CommentManager, PersonInfo
 
+NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+NS_W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
+
 
 def author_obj(name: str) -> PersonInfo:
     return PersonInfo(author=name)
+
+
+def _strip_comment_metadata(path):
+    """Strip w14:paraId/textId from comment paragraphs in a saved doc.
+
+    Satellite-part entries are left behind, as when a foreign tool rewrites
+    comments.xml without the w14 attributes.
+    """
+    doc = Document(str(path))
+    mgr = CommentManager(doc)
+    for p in mgr._comments_xml.iter(f"{{{NS_W}}}p"):
+        p.attrib.pop(f"{{{NS_W14}}}paraId", None)
+        p.attrib.pop(f"{{{NS_W14}}}textId", None)
+    mgr._save_comments()
+    doc.save(str(path))
+
+
+def test_auto_migrate_backfills_on_init(tmp_path):
+    doc = Document()
+    para = doc.add_paragraph("text")
+    mgr = CommentManager(doc)
+    mgr.add_comment(para, "c", PersonInfo(author="A"))
+    path = tmp_path / "a.docx"
+    doc.save(str(path))
+    _strip_comment_metadata(path)
+
+    doc2 = Document(str(path))
+    mgr2 = CommentManager(doc2, auto_migrate=True)
+    comment = next(iter(mgr2.list_comments()))
+    assert comment.para_id and comment.durable_id
+
+
+def test_no_auto_migrate_by_default(tmp_path):
+    doc = Document()
+    para = doc.add_paragraph("text")
+    mgr = CommentManager(doc)
+    mgr.add_comment(para, "c", PersonInfo(author="A"))
+    path = tmp_path / "a.docx"
+    doc.save(str(path))
+    _strip_comment_metadata(path)
+
+    doc2 = Document(str(path))
+    mgr2 = CommentManager(doc2)
+    comment = next(iter(mgr2.list_comments()))
+    assert comment.para_id == ""
 
 
 class TestCommentMigration:

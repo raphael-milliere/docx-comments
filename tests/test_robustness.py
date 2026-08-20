@@ -6,7 +6,7 @@ import pytest
 from docx import Document
 from lxml import etree
 
-from docx_comments import CommentManager, PersonInfo
+from docx_comments import CommentManager, CommentNotFoundError, PersonInfo
 from docx_comments.anchors import REL_FOOTNOTES, CommentAnchor
 from docx_comments.xml_parts import (
     CommentsExtendedPart,
@@ -591,6 +591,45 @@ class TestLifecycleSafety:
         ):
             assert part_name not in names
 
+    def test_delete_thread_unknown_id_no_mutation(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", author_obj("A"))
+        before = etree.tostring(doc.element.body)
+        with pytest.raises(CommentNotFoundError):
+            mgr.delete_thread("999999")
+        assert etree.tostring(doc.element.body) == before
+        assert len(list(mgr.list_comments())) == 1
+
+    def test_move_ops_unknown_id_no_mutation(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        target = doc.add_paragraph("target")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", author_obj("A"))
+        before = etree.tostring(doc.element.body)
+        with pytest.raises(CommentNotFoundError):
+            mgr.move_comment("999999", target)
+        with pytest.raises(CommentNotFoundError):
+            mgr.move_thread("999999", target)
+        assert etree.tostring(doc.element.body) == before
+
+    def test_move_thread_with_explicit_indices(self):
+        doc = Document()
+        para = doc.add_paragraph("source")
+        target = doc.add_paragraph()
+        target.add_run("one ")
+        target.add_run("two ")
+        target.add_run("three")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "root", author_obj("A"))
+        mgr.reply_to_comment(cid, "reply", author_obj("B"))
+        mgr.move_thread(cid, target, start_run=1, end_run=1)
+        assert mgr.get_anchored_text(cid) == "two "
+        thread = mgr.get_thread(cid)
+        assert thread.reply_count == 1
+
     def test_duplicate_comment_ids_warn_on_delete(self):
         doc = Document()
         mgr = CommentManager(doc)
@@ -1059,6 +1098,41 @@ class TestRunlessParagraphIndices:
             mgr.add_comment(para, "c", author_obj("A"), start_run=1)
         with pytest.raises(IndexError):
             mgr.add_comment(para, "c", author_obj("A"), end_run=0)
+
+
+class TestEmptyParagraphAnchoring:
+    def test_default_anchor_on_runless_paragraph(self, tmp_path):
+        doc = Document()
+        para = doc.add_paragraph("")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", author_obj("A"))
+        locals_ = [etree.QName(c).localname for c in para._element]
+        # pPr may precede (python-docx may not add one for a bare paragraph)
+        anchored = [x for x in locals_ if x != "pPr"]
+        assert anchored == ["commentRangeStart", "commentRangeEnd", "r"]
+        path = tmp_path / "e.docx"
+        doc.save(str(path))
+        mgr2 = CommentManager(Document(str(path)))
+        assert mgr2.get_comment(cid).text == "c"
+        assert mgr2.get_comment_paragraph(cid) is not None
+
+    def test_anchor_after_ppr_on_styled_empty_paragraph(self):
+        doc = Document()
+        para = doc.add_paragraph("", style="Heading 1")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", author_obj("A"))
+        locals_ = [etree.QName(c).localname for c in para._element]
+        assert locals_[0] == "pPr"
+        assert locals_[1] == "commentRangeStart"
+
+    def test_move_comment_onto_empty_paragraph(self):
+        doc = Document()
+        para = doc.add_paragraph("source")
+        empty = doc.add_paragraph("")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", author_obj("A"))
+        mgr.move_comment(cid, empty)
+        assert mgr.get_comment_paragraph(cid)._element is empty._element
 
 
 class TestTextboxText:

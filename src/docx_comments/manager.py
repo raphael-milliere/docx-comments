@@ -1124,8 +1124,11 @@ class CommentManager:
                 Accepts True (ensure an entry for the comment author), a str
                 author name or PersonInfo (must match the comment author), or
                 a dict with optional "author" and presence keys
-                ("provider_id"/"user_id" or a "presence" dict). None/False
-                leave people.xml untouched.
+                ("provider_id"/"user_id" or a "presence" dict). False leaves
+                people.xml untouched. None (the default) also leaves it
+                untouched UNLESS the author PersonInfo carries presence
+                metadata, in which case the entry is auto-linked; pass
+                person=False to suppress that.
             timestamp: Optional creation time. Naive datetimes are
                 interpreted as local time; None uses the current time.
 
