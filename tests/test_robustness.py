@@ -1302,3 +1302,32 @@ class TestBlockLevelAnchors:
         with pytest.raises(ValueError, match="Could not find anchors"):
             mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
         assert len(list(mgr.list_comments())) == 1, "no orphan reply left behind"
+
+    def test_reply_tr_level_without_parent_ref_run_descends_into_cell(self):
+        doc = Document()
+        table = doc.add_table(rows=1, cols=2)
+        cell_para = table.cell(0, 0).paragraphs[0]
+        cell_para.add_run("cell text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(cell_para, "root", PersonInfo(author="A"))
+        tr = table._tbl.tr_lst[0]
+        start = tr.find(f".//{qn(NS_W, 'commentRangeStart')}")
+        end = tr.find(f".//{qn(NS_W, 'commentRangeEnd')}")
+        first_tc = tr.find(qn(NS_W, "tc"))
+        first_tc.addprevious(start)
+        tr.append(end)
+        # Strip the parent's reference run to force the descend-into-
+        # paragraph fallback at block level.
+        ref = tr.find(f".//{qn(NS_W, 'commentReference')}")
+        ref_run = ref.getparent()
+        ref_run.getparent().remove(ref_run)
+        mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        assert all(etree.QName(c).localname != "r" for c in tr), (
+            "bare w:r under w:tr is schema-invalid"
+        )
+        # Reference run landed inside the last cell's last paragraph.
+        last_cell_para = table.cell(0, 1).paragraphs[-1]
+        assert (
+            last_cell_para._element.find(f".//{qn(NS_W, 'commentReference')}")
+            is not None
+        )
