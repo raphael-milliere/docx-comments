@@ -227,8 +227,13 @@ class CommentAnchor:
             anchorable = [
                 child
                 for child in para_elem
-                if child.tag == _qn(NS_W, "r")
-                or etree.QName(child).localname in _RUN_CONTAINER_TAGS
+                # Non-element nodes (XML comments/PIs) have a non-string tag
+                # and would make QName raise.
+                if isinstance(child.tag, str)
+                and (
+                    child.tag == _qn(NS_W, "r")
+                    or etree.QName(child).localname in _RUN_CONTAINER_TAGS
+                )
             ]
             if anchorable:
                 return anchorable[0], anchorable[-1]

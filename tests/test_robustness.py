@@ -341,6 +341,27 @@ class TestMixedContentAnchors:
         locals_ = self._child_locals(para)
         assert locals_.index("commentRangeStart") < locals_.index("ins")
 
+    def test_xml_comment_node_in_paragraph_is_skipped(self):
+        doc = Document()
+        para = doc.add_paragraph()
+        para._element.append(etree.Comment("note"))
+        para.add_run("text")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        children = list(para._element)
+        start_idx = next(
+            i for i, c in enumerate(children) if c.tag == qn(NS_W, "commentRangeStart")
+        )
+        end_idx = next(
+            i for i, c in enumerate(children) if c.tag == qn(NS_W, "commentRangeEnd")
+        )
+        run_idx = next(
+            i
+            for i, c in enumerate(children)
+            if c.tag == qn(NS_W, "r") and c.find(qn(NS_W, "t")) is not None
+        )
+        assert start_idx < run_idx < end_idx
+
     def test_explicit_indices_still_address_direct_runs(self):
         doc = Document()
         para = doc.add_paragraph()
