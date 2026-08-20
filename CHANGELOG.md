@@ -5,7 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - Unreleased
+
+### Added
+
+- `edit_comment()` — in-place text/author/initials/date editing preserving
+  comment id, durable id, threading, resolution, and anchors
+- Character-offset anchoring (`add_comment(..., start_char=, end_char=)`) and
+  substring/regex anchoring (`add_comment_on_text()`), splitting runs without
+  changing document text
+- Read-side API: `get_comment()`, `get_thread()`, `get_anchored_text()`,
+  `get_comment_paragraph()`
+- Rich comment content: formatted runs (bold/italic/underline) and multiple
+  paragraphs
+- Caller-controlled timestamps on `add_comment`/`reply_to_comment`/`edit_comment`
+- Typed exceptions: `CommentNotFoundError` (subclasses ValueError+LookupError),
+  `PersonNotFoundError` (subclasses KeyError)
+- Plain-`str` authors accepted alongside `PersonInfo`; python-docx native
+  `int` comment ids accepted everywhere
+- CI: macOS and Windows matrix legs, `ruff format --check` gate
+
+### Fixed
+
+- Replies to comments with block-level range markers (body/table level) no
+  longer emit a schema-invalid bare `w:r` that triggers Word's repair prompt
+- Comments anchored only by a `commentReference` (no range markers — legal
+  per ECMA-376) can now be replied to
+- Default whole-paragraph anchors now include hyperlink/tracked-change/field
+  containers instead of silently truncating
+- Replies into a resolved thread inherit `done=1` instead of creating a mixed
+  thread state
+- `w15:done` now parsed as ST_OnOff (`"true"`/`"on"` recognized, not just `"1"`)
+- XML-illegal person identity values are rejected before any part creation;
+  `ensure_person` writes atomically (no half-built entries)
+- comments.xml created via python-docx's native template now declares
+  `mc:Ignorable`
+- Anchor reference runs carry Word's `rStyle CommentReference`
+- `CommentInfo.comment_id` is `Optional[str]`, matching runtime behavior on
+  id-less comments
+
+### Changed
+
+- `resolve`/`delete` operations skip the full metadata migration scan when
+  satellite parts are already complete (large-document batch performance)
 
 ## [0.4.0] - 2026-08-19
 
@@ -113,7 +155,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `commentsExtended.xml` - Threading (paraId, paraIdParent, done)
   - `commentsIds.xml` - Durable IDs
 
-[Unreleased]: https://github.com/sunt05/docx-comments/compare/v0.4.0...HEAD
+[0.5.0]: https://github.com/sunt05/docx-comments/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/sunt05/docx-comments/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/sunt05/docx-comments/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/sunt05/docx-comments/compare/v0.1.1...v0.2.0

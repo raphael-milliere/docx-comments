@@ -2,18 +2,29 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Dict, Optional, Sequence, Tuple, Union
+
+RunSpec = Union[str, Tuple[str, Dict[str, bool]]]
+"""A comment run: plain text, or (text, {"bold"/"italic"/"underline": True})."""
+
+ParagraphSpec = Union[str, Sequence[RunSpec]]
+"""A comment paragraph: plain text or a sequence of runs."""
+
+CommentContent = Union[str, Sequence[ParagraphSpec]]
+"""Comment content: a plain string (one paragraph) or paragraph sequence."""
 
 
 @dataclass
 class CommentInfo:
     """Information about a single comment."""
 
-    comment_id: str
-    """Unique comment ID (w:id attribute)."""
+    comment_id: Optional[str]
+    """Unique comment ID (w:id attribute). None for schema-invalid comments
+    that lack w:id (the library still lists them)."""
 
     para_id: str
-    """Paragraph ID linking to extended/ids parts (w14:paraId)."""
+    """Paragraph ID linking to extended/ids parts (w14:paraId). Empty string
+    ("") when the comment has no identifiable paragraph id."""
 
     text: str
     """Comment text content."""

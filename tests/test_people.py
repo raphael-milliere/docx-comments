@@ -1,15 +1,27 @@
 """Tests for people.xml identity support."""
 
 import warnings
+import zipfile
 
 import pytest
 from docx import Document
+from lxml import etree
 
 from docx_comments import CommentManager, PersonInfo
+
+NS_W15 = "http://schemas.microsoft.com/office/word/2012/wordml"
 
 
 def author_obj(name: str) -> PersonInfo:
     return PersonInfo(author=name)
+
+
+def _people_entries(path):
+    with zipfile.ZipFile(path) as zf:
+        if "word/people.xml" not in zf.namelist():
+            return []
+        root = etree.fromstring(zf.read("word/people.xml"))
+    return [e for e in root if etree.QName(e).localname == "person"]
 
 
 class TestPeopleXml:
@@ -228,3 +240,126 @@ class TestPeopleXml:
         assert presence is not None
         assert presence.get(f"{{{ns_w15}}}providerId") == "provider"
         assert presence.get(f"{{{ns_w15}}}userId") == "user"
+
+
+class TestPersonSpecForms:
+    """The README-documented person= spec forms all reach people.xml."""
+
+    def _mgr(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        return doc, para, CommentManager(doc)
+
+    def test_person_true_creates_entry(self, tmp_path):
+        doc, para, mgr = self._mgr()
+        mgr.add_comment(para, "c", PersonInfo(author="A"), person=True)
+        path = tmp_path / "p.docx"
+        doc.save(str(path))
+        entries = _people_entries(path)
+        assert len(entries) == 1
+        assert entries[0].get(f"{{{NS_W15}}}author") == "A"
+
+    @pytest.mark.parametrize(
+        "spec",
+        [
+            {"provider_id": "AD", "user_id": "S::u"},
+            {"providerId": "AD", "userId": "S::u"},
+            {"presence": {"provider_id": "AD", "user_id": "S::u"}},
+        ],
+    )
+    def test_person_dict_forms(self, tmp_path, spec):
+        doc, para, mgr = self._mgr()
+        mgr.add_comment(para, "c", PersonInfo(author="A"), person=spec)
+        path = tmp_path / "p.docx"
+        doc.save(str(path))
+        entries = _people_entries(path)
+        assert len(entries) == 1
+        presence = entries[0].find(f"{{{NS_W15}}}presenceInfo")
+        assert presence is not None
+        assert presence.get(f"{{{NS_W15}}}providerId") == "AD"
+        assert presence.get(f"{{{NS_W15}}}userId") == "S::u"
+
+    def test_person_dict_with_author_key(self, tmp_path):
+        doc, para, mgr = self._mgr()
+        mgr.add_comment(para, "c", PersonInfo(author="A"), person={"author": "A"})
+        path = tmp_path / "p.docx"
+        doc.save(str(path))
+        entries = _people_entries(path)
+        assert len(entries) == 1
+        assert entries[0].get(f"{{{NS_W15}}}author") == "A"
+
+    def test_person_dict_partial_presence_raises(self):
+        _, para, mgr = self._mgr()
+        with pytest.raises(ValueError, match="provider_id and user_id"):
+            mgr.add_comment(para, "c", PersonInfo(author="A"), person={"provider_id": "AD"})
+
+    def test_person_invalid_type(self):
+        _, para, mgr = self._mgr()
+        with pytest.raises(TypeError, match="person must be"):
+            mgr.add_comment(para, "c", PersonInfo(author="A"), person=42)
+
+    def test_reply_person_true(self, tmp_path):
+        doc, para, mgr = self._mgr()
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"))
+        mgr.reply_to_comment(cid, "r", PersonInfo(author="B"), person=True)
+        path = tmp_path / "p.docx"
+        doc.save(str(path))
+        authors = {e.get(f"{{{NS_W15}}}author") for e in _people_entries(path)}
+        assert authors == {"B"}
+
+    def test_presence_author_auto_links(self, tmp_path):
+        doc, para, mgr = self._mgr()
+        mgr.add_comment(
+            para,
+            "c",
+            PersonInfo(author="A", provider_id="AD", user_id="S::u"),
+        )
+        path = tmp_path / "p.docx"
+        doc.save(str(path))
+        assert len(_people_entries(path)) == 1
+
+    def test_person_false_suppresses_auto_link(self, tmp_path):
+        doc, para, mgr = self._mgr()
+        mgr.add_comment(
+            para,
+            "c",
+            PersonInfo(author="A", provider_id="AD", user_id="S::u"),
+            person=False,
+        )
+        path = tmp_path / "p.docx"
+        doc.save(str(path))
+        assert _people_entries(path) == []
+
+
+class TestPersonXmlLegality:
+    def test_illegal_presence_raises_before_any_mutation(self, tmp_path):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        with pytest.raises(ValueError, match="not allowed in XML"):
+            mgr.add_comment(
+                para,
+                "c",
+                PersonInfo(author="A"),
+                person={"provider_id": "AD\x00", "user_id": "u"},
+            )
+        path = tmp_path / "clean.docx"
+        doc.save(str(path))
+        with zipfile.ZipFile(path) as zf:
+            names = set(zf.namelist())
+        assert "word/comments.xml" not in names
+        assert "word/people.xml" not in names
+
+    def test_illegal_author_in_ensure_person_no_ghost_entry(self, tmp_path):
+        doc = Document()
+        mgr = CommentManager(doc)
+        with pytest.raises(ValueError, match="not allowed in XML"):
+            mgr.ensure_person("bad\x00author")
+        assert mgr.get_people() == []
+        # A later valid write must not resurrect a half-built entry.
+        mgr.ensure_person("Good Author")
+        path = tmp_path / "p.docx"
+        doc.save(str(path))
+        doc2 = Document(str(path))
+        people = CommentManager(doc2).get_people()
+        assert [p.author for p in people] == ["Good Author"]

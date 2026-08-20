@@ -10,6 +10,7 @@ from docx.opc.packuri import PackURI
 from docx.opc.part import Part
 from lxml import etree
 
+from docx_comments.exceptions import PersonNotFoundError
 from docx_comments.models import PersonInfo
 
 if TYPE_CHECKING:
@@ -32,12 +33,8 @@ NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 
 # Relationship types
 REL_COMMENTS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments"
-REL_COMMENTS_EXT = (
-    "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
-)
-REL_COMMENTS_IDS = (
-    "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds"
-)
+REL_COMMENTS_EXT = "http://schemas.microsoft.com/office/2011/relationships/commentsExtended"
+REL_COMMENTS_IDS = "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds"
 REL_PEOPLE = "http://schemas.microsoft.com/office/2011/relationships/people"
 REL_COMMENTS_EXTENSIBLE = (
     "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible"
@@ -48,9 +45,7 @@ CT_COMMENTS = "application/vnd.openxmlformats-officedocument.wordprocessingml.co
 CT_COMMENTS_EXT = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml"
 )
-CT_COMMENTS_IDS = (
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml"
-)
+CT_COMMENTS_IDS = "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml"
 CT_PEOPLE = "application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml"
 CT_COMMENTS_EXTENSIBLE = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtensible+xml"
@@ -78,6 +73,17 @@ _SAFE_PARSER = etree.XMLParser(resolve_entities=False, no_network=True)
 def parse_xml_bytes(blob: bytes) -> etree._Element:
     """Parse XML bytes with entity resolution disabled."""
     return etree.fromstring(blob, _SAFE_PARSER)
+
+
+def validate_xml_text(value: Optional[str], what: str) -> None:
+    """Raise a clear ValueError when a string cannot be stored in XML."""
+    if value is None:
+        return
+    probe = etree.Element("probe")
+    try:
+        probe.text = value
+    except ValueError as exc:
+        raise ValueError(f"{what} contains characters not allowed in XML: {exc}") from exc
 
 
 def part_is_blob_backed(part: Any) -> bool:
@@ -154,6 +160,25 @@ def sync_part_blob(part: Any) -> None:
         setattr(part, _CACHED_BLOB_ATTR, blob)
 
 
+def ensure_mc_ignorable(root: etree._Element, prefixes: tuple = ("w14", "w15")) -> bool:
+    """Add missing prefixes to the root's mc:Ignorable attribute.
+
+    Only prefixes actually declared on the root are added (ISO 29500-3
+    requires ignorable prefixes to be in scope), and only when the mc
+    namespace itself is declared (lxml cannot add declarations to an
+    existing root). Returns True when the attribute was modified.
+    """
+    declared = root.nsmap or {}
+    if NS_MC not in declared.values():
+        return False
+    current = (root.get(_qn(NS_MC, "Ignorable")) or "").split()
+    additions = [p for p in prefixes if p in declared and p not in current]
+    if not additions:
+        return False
+    root.set(_qn(NS_MC, "Ignorable"), " ".join(current + additions))
+    return True
+
+
 class _BasePartHandler:
     """Shared plumbing for the comment-related part handlers.
 
@@ -223,8 +248,7 @@ class _BasePartHandler:
         elem = part_element(part)
         if elem is None:
             raise ValueError(
-                f"cannot read {self._partname}: the part exists but its XML "
-                "cannot be parsed"
+                f"cannot read {self._partname}: the part exists but its XML cannot be parsed"
             )
         return elem
 
@@ -257,6 +281,9 @@ class CommentsPart(_BasePartHandler):
         """
         if _NativeCommentsPart is not None:
             part = _NativeCommentsPart.default(self._document.part.package)
+            # The native template declares w14/mc but omits mc:Ignorable;
+            # this library writes w14:paraId/textId, so declare it ignorable.
+            ensure_mc_ignorable(part.element)
             self._document.part.relate_to(part, REL_COMMENTS)
             return
         super()._create_part()  # pragma: no cover - python-docx < 1.2.0
@@ -337,7 +364,9 @@ class CommentsExtendedPart(_BasePartHandler):
             if etree.QName(elem).localname == "commentEx":
                 para_id = elem.get(_qn(NS_W15, "paraId"))
                 parent = elem.get(_qn(NS_W15, "paraIdParent"))
-                done = elem.get(_qn(NS_W15, "done"), "0") == "1"
+                done_raw = elem.get(_qn(NS_W15, "done"), "0")
+                # w15:done is ST_OnOff: "1"/"true"/"on" are all resolved.
+                done = done_raw.strip().lower() in ("1", "true", "on")
                 if para_id:
                     result[para_id] = {
                         "parent_para_id": parent,
@@ -522,6 +551,23 @@ class CommentsExtensiblePart(_BasePartHandler):
             elem.set(_qn(NS_W16CEX, "dateUtc"), date_utc)
         self._save()
 
+    def set_date_utc(self, durable_id: str, date_utc: str) -> bool:
+        """Overwrite the dateUtc for an existing entry.
+
+        Returns True when an entry was updated.
+        """
+        updated = False
+        for elem in self.xml:
+            if (
+                etree.QName(elem).localname == "commentExtensible"
+                and elem.get(_qn(NS_W16CEX, "durableId")) == durable_id
+            ):
+                elem.set(_qn(NS_W16CEX, "dateUtc"), date_utc)
+                updated = True
+        if updated:
+            self._save()
+        return updated
+
     def remove_comment_extensible(self, durable_id: str) -> bool:
         """
         Remove a commentExtensible entry by durableId.
@@ -632,9 +678,7 @@ class PeoplePart(_BasePartHandler):
         return None
 
     @staticmethod
-    def _find_child_by_localname(
-        elem: etree._Element, localname: str
-    ) -> Optional[etree._Element]:
+    def _find_child_by_localname(elem: etree._Element, localname: str) -> Optional[etree._Element]:
         for child in elem:
             if etree.QName(child).localname == localname:
                 return child
@@ -675,7 +719,7 @@ class PeoplePart(_BasePartHandler):
             raise ValueError("author must be non-empty")
         elem = self._find_person_elem(author)
         if elem is None:
-            raise KeyError(f"person '{author}' not found")
+            raise PersonNotFoundError(f"person '{author}' not found")
         return self._person_info_from_elem(elem)
 
     @staticmethod
@@ -686,39 +730,43 @@ class PeoplePart(_BasePartHandler):
             raise ValueError("presence must include provider_id and user_id")
         return provider_id, user_id
 
-    def ensure_person(
-        self, author: str, presence: Optional[dict[str, str]] = None
-    ) -> PersonInfo:
+    def ensure_person(self, author: str, presence: Optional[dict[str, str]] = None) -> PersonInfo:
         """Ensure a person entry exists, optionally adding presence metadata."""
         if not author:
             raise ValueError("author must be non-empty")
+        validate_xml_text(author, "person author")
 
-        # Validate presence before touching the package so a bad spec cannot
-        # leave an empty people.xml part behind.
+        # Validate everything before touching the package or the cached
+        # tree, so a bad spec cannot leave a part or half-built entry behind.
         normalized: Optional[tuple[str, str]] = None
         if presence:
             normalized = self._normalize_presence(presence)
+            validate_xml_text(normalized[0], "presence provider_id")
+            validate_xml_text(normalized[1], "presence user_id")
 
         person_elem = self._find_person_elem(author)
         if person_elem is None:
+            # Build detached and attach only when complete.
+            new_elem = etree.Element(_qn(NS_W15, "person"))
+            new_elem.set(_qn(NS_W15, "author"), author)
+            if normalized:
+                presence_elem = etree.SubElement(new_elem, _qn(NS_W15, "presenceInfo"))
+                presence_elem.set(_qn(NS_W15, "providerId"), normalized[0])
+                presence_elem.set(_qn(NS_W15, "userId"), normalized[1])
             self.ensure_exists()
-            person_elem = etree.SubElement(self.xml, _qn(NS_W15, "person"))
-            person_elem.set(_qn(NS_W15, "author"), author)
-
-        if normalized:
-            provider_id, user_id = normalized
+            self.xml.append(new_elem)
+            person_elem = new_elem
+        elif normalized:
             presence_elem = self._find_child_by_localname(person_elem, "presenceInfo")
             if presence_elem is None:
                 presence_elem = etree.SubElement(person_elem, _qn(NS_W15, "presenceInfo"))
-            presence_elem.set(_qn(NS_W15, "providerId"), provider_id)
-            presence_elem.set(_qn(NS_W15, "userId"), user_id)
+            presence_elem.set(_qn(NS_W15, "providerId"), normalized[0])
+            presence_elem.set(_qn(NS_W15, "userId"), normalized[1])
 
         self._save()
         return self._person_info_from_elem(person_elem)
 
-    def merge_from(
-        self, source: "PeoplePart", include_presence: bool = False
-    ) -> list[PersonInfo]:
+    def merge_from(self, source: "PeoplePart", include_presence: bool = False) -> list[PersonInfo]:
         """
         Merge people entries from another document.
 

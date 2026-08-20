@@ -6,11 +6,12 @@ import pytest
 from docx import Document
 from lxml import etree
 
-from docx_comments import CommentManager, PersonInfo
+from docx_comments import CommentManager, CommentNotFoundError, PersonInfo
 from docx_comments.anchors import REL_FOOTNOTES, CommentAnchor
 from docx_comments.xml_parts import (
     CommentsExtendedPart,
     CommentsIdsPart,
+    CommentsPart,
     parse_xml_bytes,
     part_element,
 )
@@ -19,10 +20,9 @@ NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS_W14 = "http://schemas.microsoft.com/office/word/2010/wordml"
 NS_W15 = "http://schemas.microsoft.com/office/word/2012/wordml"
 NS_XML = "http://www.w3.org/XML/1998/namespace"
+NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
 
-CT_FOOTNOTES = (
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"
-)
+CT_FOOTNOTES = "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"
 
 HAS_NATIVE_COMMENTS = hasattr(Document(), "add_comment")
 
@@ -253,9 +253,7 @@ class TestAnchorValidation:
         for word in ("one ", "two ", "three"):
             para.add_run(word)
         mgr = CommentManager(doc)
-        comment_id = mgr.add_comment(
-            para, "c", author_obj("A"), start_run=-1, end_run=-1
-        )
+        comment_id = mgr.add_comment(para, "c", author_obj("A"), start_run=-1, end_run=-1)
 
         children = list(para._element)
         localnames = [etree.QName(c).localname for c in children]
@@ -290,6 +288,109 @@ class TestAnchorValidation:
         localnames = [etree.QName(c).localname for c in para._element]
         assert localnames.index("commentRangeStart") < localnames.index("hyperlink")
         assert localnames.index("hyperlink") < localnames.index("commentRangeEnd")
+
+
+def _append_hyperlink(para, text):
+    hyperlink = etree.SubElement(para._element, qn(NS_W, "hyperlink"))
+    run = etree.SubElement(hyperlink, qn(NS_W, "r"))
+    t = etree.SubElement(run, qn(NS_W, "t"))
+    t.text = text
+    return hyperlink
+
+
+class TestMixedContentAnchors:
+    def _child_locals(self, para):
+        return [etree.QName(c).localname for c in para._element]
+
+    def test_run_then_hyperlink_default_anchor_covers_all(self):
+        doc = Document()
+        para = doc.add_paragraph()
+        para.add_run("See ")
+        _append_hyperlink(para, "the link")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        locals_ = self._child_locals(para)
+        assert locals_.index("commentRangeEnd") > locals_.index("hyperlink"), (
+            f"anchor truncated before the hyperlink: {locals_}"
+        )
+
+    def test_hyperlink_then_run_default_anchor_covers_all(self):
+        doc = Document()
+        para = doc.add_paragraph()
+        _append_hyperlink(para, "the link")
+        para.add_run(" trailing")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        locals_ = self._child_locals(para)
+        assert locals_.index("commentRangeStart") < locals_.index("hyperlink")
+
+    def test_tracked_change_wrapper_covered(self):
+        doc = Document()
+        para = doc.add_paragraph()
+        ins = etree.SubElement(para._element, qn(NS_W, "ins"))
+        run = etree.SubElement(ins, qn(NS_W, "r"))
+        t = etree.SubElement(run, qn(NS_W, "t"))
+        t.text = "inserted"
+        para.add_run(" kept")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        locals_ = self._child_locals(para)
+        assert locals_.index("commentRangeStart") < locals_.index("ins")
+
+    def test_xml_comment_node_in_paragraph_is_skipped(self):
+        doc = Document()
+        para = doc.add_paragraph()
+        para._element.append(etree.Comment("note"))
+        para.add_run("text")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        children = list(para._element)
+        start_idx = next(
+            i for i, c in enumerate(children) if c.tag == qn(NS_W, "commentRangeStart")
+        )
+        end_idx = next(i for i, c in enumerate(children) if c.tag == qn(NS_W, "commentRangeEnd"))
+        run_idx = next(
+            i
+            for i, c in enumerate(children)
+            if c.tag == qn(NS_W, "r") and c.find(qn(NS_W, "t")) is not None
+        )
+        assert start_idx < run_idx < end_idx
+
+    def test_explicit_indices_still_address_direct_runs(self):
+        doc = Document()
+        para = doc.add_paragraph()
+        para.add_run("one")
+        _append_hyperlink(para, "link")
+        para.add_run("two")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"), start_run=0, end_run=0)
+        children = list(para._element)
+        end_idx = next(
+            i for i, c in enumerate(children) if etree.QName(c).localname == "commentRangeEnd"
+        )
+        hyper_idx = next(
+            i for i, c in enumerate(children) if etree.QName(c).localname == "hyperlink"
+        )
+        assert end_idx < hyper_idx, "explicit run indices must not span containers"
+
+    def test_reference_run_carries_comment_reference_style(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        ref = para._element.find(f".//{qn(NS_W, 'commentReference')}")
+        ref_run = ref.getparent()
+        style = ref_run.find(f"{qn(NS_W, 'rPr')}/{qn(NS_W, 'rStyle')}")
+        assert style is not None and style.get(qn(NS_W, "val")) == "CommentReference"
+
+    def test_styled_reference_run_still_removed_on_delete(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"))
+        mgr.delete_comment(cid)
+        assert para._element.find(f".//{qn(NS_W, 'commentReference')}") is None
+        assert para._element.find(qn(NS_W, "r")) is not None  # text run kept
 
 
 class TestAnchorRemoval:
@@ -415,8 +516,7 @@ class TestFootnoteAnchors:
         with ZipFile(str(path)) as zf:
             footnotes = etree.fromstring(zf.read("word/footnotes.xml"))
         anchored_ids = {
-            e.get(qn(NS_W, "id"))
-            for e in footnotes.iter(qn(NS_W, "commentRangeStart"))
+            e.get(qn(NS_W, "id")) for e in footnotes.iter(qn(NS_W, "commentRangeStart"))
         }
         assert anchored_ids == {root_id, reply_id}
 
@@ -481,6 +581,45 @@ class TestLifecycleSafety:
             "word/commentsExtensible.xml",
         ):
             assert part_name not in names
+
+    def test_delete_thread_unknown_id_no_mutation(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", author_obj("A"))
+        before = etree.tostring(doc.element.body)
+        with pytest.raises(CommentNotFoundError):
+            mgr.delete_thread("999999")
+        assert etree.tostring(doc.element.body) == before
+        assert len(list(mgr.list_comments())) == 1
+
+    def test_move_ops_unknown_id_no_mutation(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        target = doc.add_paragraph("target")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", author_obj("A"))
+        before = etree.tostring(doc.element.body)
+        with pytest.raises(CommentNotFoundError):
+            mgr.move_comment("999999", target)
+        with pytest.raises(CommentNotFoundError):
+            mgr.move_thread("999999", target)
+        assert etree.tostring(doc.element.body) == before
+
+    def test_move_thread_with_explicit_indices(self):
+        doc = Document()
+        para = doc.add_paragraph("source")
+        target = doc.add_paragraph()
+        target.add_run("one ")
+        target.add_run("two ")
+        target.add_run("three")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "root", author_obj("A"))
+        mgr.reply_to_comment(cid, "reply", author_obj("B"))
+        mgr.move_thread(cid, target, start_run=1, end_run=1)
+        assert mgr.get_anchored_text(cid) == "two "
+        thread = mgr.get_thread(cid)
+        assert thread.reply_count == 1
 
     def test_duplicate_comment_ids_warn_on_delete(self):
         doc = Document()
@@ -565,10 +704,7 @@ class TestOrphanHandling:
 
         # Simulate another tool deleting the root comment element only.
         for elem in list(mgr._comments_xml):
-            if (
-                etree.QName(elem).localname == "comment"
-                and elem.get(qn(NS_W, "id")) == root_id
-            ):
+            if etree.QName(elem).localname == "comment" and elem.get(qn(NS_W, "id")) == root_id:
                 mgr._comments_xml.remove(elem)
         mgr._save_comments()
 
@@ -677,9 +813,9 @@ class TestSecureParsing:
     def test_external_entities_not_resolved(self, tmp_path):
         secret = tmp_path / "secret.txt"
         secret.write_text("TOPSECRET")
-        xml = (
-            f'<!DOCTYPE r [<!ENTITY x SYSTEM "file://{secret}">]><r>&x;</r>'
-        ).encode()
+        # as_uri() yields a valid file URI on every OS (file:///C:/... on
+        # Windows); hand-built "file://{path}" is rejected by libxml2 there.
+        xml = (f'<!DOCTYPE r [<!ENTITY x SYSTEM "{secret.as_uri()}">]><r>&x;</r>').encode()
         root = parse_xml_bytes(xml)
         text = (root.text or "") + "".join(c.tail or "" for c in root)
         assert "TOPSECRET" not in text
@@ -716,9 +852,7 @@ class TestMigrateNoGraft:
 
         # Orphan metadata left behind by another tool's delete: a resolved
         # entry with a durable id, but no matching comment element.
-        CommentsExtendedPart(doc).add_comment_ex(
-            para_id="DEADBEEF", parent_para_id=None, done=True
-        )
+        CommentsExtendedPart(doc).add_comment_ex(para_id="DEADBEEF", parent_para_id=None, done=True)
         CommentsIdsPart(doc).add_comment_id(para_id="DEADBEEF", durable_id="FEEDFACE")
 
         # An unrelated comment added without w14:paraId (e.g. by a tool that
@@ -780,11 +914,7 @@ class TestMoveIndexStability:
         start_idx = names.index("commentRangeStart")
         end_idx = names.index("commentRangeEnd")
         spanned = children[start_idx + 1 : end_idx]
-        texts = [
-            t.text
-            for el in spanned
-            for t in el.iter(qn(NS_W, "t"))
-        ]
+        texts = [t.text for el in spanned for t in el.iter(qn(NS_W, "t"))]
         assert texts == ["two"]
 
     def test_move_onto_own_reference_run_raises_before_mutation(self):
@@ -865,9 +995,7 @@ class TestMoveIndexStability:
 
         from docx.text.paragraph import Paragraph
 
-        detached = etree.fromstring(
-            f'<w:p xmlns:w="{NS_W}"><w:r><w:t>ghost</w:t></w:r></w:p>'
-        )
+        detached = etree.fromstring(f'<w:p xmlns:w="{NS_W}"><w:r><w:t>ghost</w:t></w:r></w:p>')
         ghost_para = Paragraph(detached, doc)
         with pytest.raises(ValueError, match="detached"):
             mgr.add_comment(ghost_para, "c", author_obj("A"))
@@ -890,10 +1018,7 @@ class TestFootnoteAnchorWrites:
         _, path = saved_zip_names(doc, tmp_path, "footnote_move.docx")
         with ZipFile(str(path)) as zf:
             footnotes = etree.fromstring(zf.read("word/footnotes.xml"))
-        anchored = {
-            e.get(qn(NS_W, "id"))
-            for e in footnotes.iter(qn(NS_W, "commentRangeStart"))
-        }
+        anchored = {e.get(qn(NS_W, "id")) for e in footnotes.iter(qn(NS_W, "commentRangeStart"))}
         assert standalone_id in anchored
 
 
@@ -952,6 +1077,41 @@ class TestRunlessParagraphIndices:
             mgr.add_comment(para, "c", author_obj("A"), end_run=0)
 
 
+class TestEmptyParagraphAnchoring:
+    def test_default_anchor_on_runless_paragraph(self, tmp_path):
+        doc = Document()
+        para = doc.add_paragraph("")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", author_obj("A"))
+        locals_ = [etree.QName(c).localname for c in para._element]
+        # pPr may precede (python-docx may not add one for a bare paragraph)
+        anchored = [x for x in locals_ if x != "pPr"]
+        assert anchored == ["commentRangeStart", "commentRangeEnd", "r"]
+        path = tmp_path / "e.docx"
+        doc.save(str(path))
+        mgr2 = CommentManager(Document(str(path)))
+        assert mgr2.get_comment(cid).text == "c"
+        assert mgr2.get_comment_paragraph(cid) is not None
+
+    def test_anchor_after_ppr_on_styled_empty_paragraph(self):
+        doc = Document()
+        para = doc.add_paragraph("", style="Heading 1")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", author_obj("A"))
+        locals_ = [etree.QName(c).localname for c in para._element]
+        assert locals_[0] == "pPr"
+        assert locals_[1] == "commentRangeStart"
+
+    def test_move_comment_onto_empty_paragraph(self):
+        doc = Document()
+        para = doc.add_paragraph("source")
+        empty = doc.add_paragraph("")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", author_obj("A"))
+        mgr.move_comment(cid, empty)
+        assert mgr.get_comment_paragraph(cid)._element is empty._element
+
+
 class TestTextboxText:
     def test_textbox_text_counted_once(self):
         doc = Document()
@@ -983,9 +1143,7 @@ class TestIdPoolCoversAllStories:
         doc = Document()
         header_para = doc.sections[0].header.paragraphs[0]
         header_para.add_run("Header text")
-        stray = etree.SubElement(
-            header_para._element.getparent(), qn(NS_W, "commentRangeStart")
-        )
+        stray = etree.SubElement(header_para._element.getparent(), qn(NS_W, "commentRangeStart"))
         stray.set(qn(NS_W, "id"), "777")
 
         seq = iter(["777", "778"])
@@ -1152,8 +1310,205 @@ class TestMixedReferenceRuns:
         start_idx = names.index("commentRangeStart")
         end_idx = names.index("commentRangeEnd")
         spanned_text = [
-            t.text
-            for el in children[start_idx + 1 : end_idx]
-            for t in el.iter(qn(NS_W, "t"))
+            t.text for el in children[start_idx + 1 : end_idx] for t in el.iter(qn(NS_W, "t"))
         ]
         assert spanned_text == ["beta"]
+
+
+class TestDoneLexicalForms:
+    """w15:done is ST_OnOff: "1"/"true"/"on" all mean resolved."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("1", True),
+            ("true", True),
+            ("on", True),
+            ("0", False),
+            ("false", False),
+            ("off", False),
+            ("garbage", False),
+            (" TRUE ", True),
+        ],
+    )
+    def test_st_onoff_values(self, raw, expected):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", PersonInfo(author="A"))
+        ext = CommentsExtendedPart(doc)
+        for elem in ext.xml:
+            if etree.QName(elem).localname == "commentEx":
+                elem.set(qn(NS_W15, "done"), raw)
+        ext._save()
+        comment = next(iter(mgr.list_comments()))
+        assert comment.is_resolved is expected
+
+
+class TestMcIgnorableMigration:
+    """migrate_comment_metadata declares mc:Ignorable when backfilling w14."""
+
+    def test_migrate_adds_mc_ignorable_when_backfilling(self):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        mgr.add_comment(para, "c", author_obj("A"))
+        root = CommentsPart(doc).xml
+        # Simulate a foreign comments.xml: prefixes declared on the root but
+        # no mc:Ignorable and no w14 paragraph attributes.
+        root.attrib.pop(qn(NS_MC, "Ignorable"), None)
+        for p in root.iter(qn(NS_W, "p")):
+            p.attrib.pop(qn(NS_W14, "paraId"), None)
+            p.attrib.pop(qn(NS_W14, "textId"), None)
+
+        mgr.migrate_comment_metadata()
+
+        ignorable = root.get(qn(NS_MC, "Ignorable"))
+        assert ignorable is not None and "w14" in ignorable.split()
+
+
+class TestBlockLevelAnchors:
+    def _hoist_to_body(self, doc, p_first, p_last):
+        body = doc.element.body
+        start = body.find(f".//{qn(NS_W, 'commentRangeStart')}")
+        end = body.find(f".//{qn(NS_W, 'commentRangeEnd')}")
+        p_first._element.addprevious(start)
+        p_last._element.addnext(end)
+
+    def test_reply_to_body_level_range_is_schema_valid(self, tmp_path):
+        doc = Document()
+        p1 = doc.add_paragraph("first")
+        p2 = doc.add_paragraph("second")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(p1, "root", PersonInfo(author="A"))
+        self._hoist_to_body(doc, p1, p2)
+        rid = mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        body = doc.element.body
+        assert all(etree.QName(c).localname != "r" for c in body), (
+            "bare w:r under w:body is schema-invalid"
+        )
+        path = tmp_path / "b.docx"
+        doc.save(str(path))
+        doc2 = Document(str(path))
+        threads = CommentManager(doc2).get_comment_threads()
+        assert len(threads) == 1 and threads[0].reply_count == 1
+        assert threads[0].replies[0].comment_id == rid
+
+    def test_reply_body_level_without_parent_ref_run(self):
+        doc = Document()
+        p1 = doc.add_paragraph("first")
+        p2 = doc.add_paragraph("second")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(p1, "root", PersonInfo(author="A"))
+        self._hoist_to_body(doc, p1, p2)
+        # Strip the parent's reference run to force the descend-into-
+        # paragraph fallback.
+        ref = doc.element.body.find(f".//{qn(NS_W, 'commentReference')}")
+        ref_run = ref.getparent()
+        ref_run.getparent().remove(ref_run)
+        mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        body = doc.element.body
+        assert all(etree.QName(c).localname != "r" for c in body)
+        # Reference run landed inside the last paragraph of the range.
+        assert p2._element.find(f".//{qn(NS_W, 'commentReference')}") is not None
+
+    def test_reply_to_tr_level_range_is_schema_valid(self):
+        doc = Document()
+        table = doc.add_table(rows=1, cols=2)
+        cell_para = table.cell(0, 0).paragraphs[0]
+        cell_para.add_run("cell text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(cell_para, "root", PersonInfo(author="A"))
+        tr = table._tbl.tr_lst[0]
+        start = tr.find(f".//{qn(NS_W, 'commentRangeStart')}")
+        end = tr.find(f".//{qn(NS_W, 'commentRangeEnd')}")
+        first_tc = tr.find(qn(NS_W, "tc"))
+        first_tc.addprevious(start)
+        tr.append(end)
+        mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        assert all(etree.QName(c).localname != "r" for c in tr), (
+            "bare w:r under w:tr is schema-invalid"
+        )
+
+    def test_reply_to_reference_only_anchor(self, tmp_path):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "root", PersonInfo(author="A"))
+        # Strip range markers, keep the reference (legal per ECMA-376).
+        body = doc.element.body
+        for tag in ("commentRangeStart", "commentRangeEnd"):
+            for elem in list(body.iter(qn(NS_W, tag))):
+                elem.getparent().remove(elem)
+        rid = mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        path = tmp_path / "r.docx"
+        doc.save(str(path))
+        doc2 = Document(str(path))
+        threads = CommentManager(doc2).get_comment_threads()
+        assert len(threads) == 1 and threads[0].reply_count == 1
+        # Range markers were synthesized for the reply.
+        starts = [
+            e
+            for e in doc2.element.body.iter(qn(NS_W, "commentRangeStart"))
+            if e.get(qn(NS_W, "id")) == rid
+        ]
+        assert len(starts) == 1
+
+    def test_reply_with_no_anchors_at_all_still_raises(self):
+        from docx_comments.anchors import CommentAnchor
+
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "root", PersonInfo(author="A"))
+        CommentAnchor(doc).remove_anchors(cid)
+        with pytest.raises(ValueError, match="Could not find anchors"):
+            mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        assert len(list(mgr.list_comments())) == 1, "no orphan reply left behind"
+
+    def test_reply_tr_level_without_parent_ref_run_descends_into_cell(self):
+        doc = Document()
+        table = doc.add_table(rows=1, cols=2)
+        cell_para = table.cell(0, 0).paragraphs[0]
+        cell_para.add_run("cell text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(cell_para, "root", PersonInfo(author="A"))
+        tr = table._tbl.tr_lst[0]
+        start = tr.find(f".//{qn(NS_W, 'commentRangeStart')}")
+        end = tr.find(f".//{qn(NS_W, 'commentRangeEnd')}")
+        first_tc = tr.find(qn(NS_W, "tc"))
+        first_tc.addprevious(start)
+        tr.append(end)
+        # Strip the parent's reference run to force the descend-into-
+        # paragraph fallback at block level.
+        ref = tr.find(f".//{qn(NS_W, 'commentReference')}")
+        ref_run = ref.getparent()
+        ref_run.getparent().remove(ref_run)
+        mgr.reply_to_comment(cid, "reply", PersonInfo(author="B"))
+        assert all(etree.QName(c).localname != "r" for c in tr), (
+            "bare w:r under w:tr is schema-invalid"
+        )
+        # Reference run landed inside the last cell's last paragraph.
+        last_cell_para = table.cell(0, 1).paragraphs[-1]
+        assert last_cell_para._element.find(f".//{qn(NS_W, 'commentReference')}") is not None
+
+
+class TestParentChainCycle:
+    """A paraIdParent cycle (foreign/corrupt metadata) must not hang."""
+
+    def test_cycle_terminates(self):
+        doc = Document()
+        p1 = doc.add_paragraph("one")
+        p2 = doc.add_paragraph("two")
+        mgr = CommentManager(doc)
+        c1 = mgr.add_comment(p1, "a", PersonInfo(author="A"))
+        c2 = mgr.add_comment(p2, "b", PersonInfo(author="B"))
+        pid1 = mgr.get_comment(c1).para_id
+        pid2 = mgr.get_comment(c2).para_id
+        ext = CommentsExtendedPart(doc)
+        ext.set_parent(pid1, pid2)
+        ext.set_parent(pid2, pid1)
+        threads = mgr.get_comment_threads()
+        total = sum(len(t.all_comments) for t in threads)
+        assert total == 2
+        mgr.resolve_comment(c1)  # must terminate

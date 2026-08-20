@@ -5,7 +5,7 @@
 [![CI](https://github.com/sunt05/docx-comments/actions/workflows/ci.yml/badge.svg)](https://github.com/sunt05/docx-comments/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Python module for complete Word document comment manipulation - adding, replying, and resolving comments with full Word Online compatibility.
+Python module for complete Word document comment manipulation - adding, replying, editing, and resolving comments with full Word Online compatibility.
 
 ## Problem
 
@@ -14,7 +14,8 @@ no support for the rest of the comment machinery Word and Word Online rely on:
 - No `commentsExtended.xml` (threading, resolution/done status)
 - No `commentsIds.xml` (durable IDs)
 - No `commentsExtensible.xml` (modern comment metadata)
-- No reply, resolve, delete, or move operations
+- No reply, edit, resolve, delete, or move operations
+- No way to anchor a comment to an exact substring or character range
 
 Microsoft Graph API does NOT support Word comments (only Excel).
 
@@ -22,11 +23,15 @@ Microsoft Graph API does NOT support Word comments (only Excel).
 
 This module provides complete OOXML comment manipulation based on ECMA-376 / ISO/IEC 29500:
 - Add anchored comments to specific text ranges
+- Anchor to exact text: substring/regex matching or character offsets
 - Reply to existing comments (threaded)
+- Edit comment text in place (threading, resolution, and anchors preserved)
+- Rich comment content: bold/italic/underline runs, multiple paragraphs
 - Mark comments as resolved
 - Unresolve comments and toggle done status
 - Delete comments or entire threads
 - Move comment anchors to new locations
+- Read back comments, threads, and the text a comment is anchored to
 - Full Word Online compatibility
 - Optional people.xml identity linkage (Word account presence)
 
@@ -40,12 +45,12 @@ pip install docx-comments
 
 ```python
 from docx import Document
-from docx_comments import CommentManager, PersonInfo
+from docx_comments import CommentManager
 
 doc = Document("document.docx")
 mgr = CommentManager(doc)  # creates no parts until the first write
 
-# Author must be a PersonInfo object, not a raw string.
+# author can be a plain string, or PersonInfo for identity linkage
 
 # Add an anchored comment. By default the whole paragraph is anchored;
 # start_run/end_run select a run range (indices are validated — out-of-range
@@ -53,16 +58,15 @@ mgr = CommentManager(doc)  # creates no parts until the first write
 comment_id = mgr.add_comment(
     paragraph=doc.paragraphs[0],
     text="Please review this section",
-    author=PersonInfo(author="Reviewer Name"),
+    author="Reviewer Name",
     initials="RN",
-    person=True,  # ensure people.xml entry exists for identity linkage
 )
 
 # Reply to existing comment
 reply_id = mgr.reply_to_comment(
     parent_id=comment_id,
     text="Addressed in this revision",
-    author=PersonInfo(author="Author Name"),
+    author="Author Name",
     initials="AN"
 )
 
@@ -92,6 +96,105 @@ for thread in mgr.get_comment_threads():
 doc.save("document_reviewed.docx")
 ```
 
+### Anchoring to exact text
+
+Instead of run indices, a comment can be anchored to the exact characters it
+is about. Runs are split as needed; the document's visible text is never
+changed.
+
+```python
+import re
+
+para = doc.paragraphs[0]  # "Please review this section before the deadline."
+
+# Anchor to a substring (first occurrence by default)
+cid = mgr.add_comment_on_text(para, "review this", "Tighten the wording", "Reviewer Name")
+
+# Nth occurrence, or a compiled regular expression
+cid = mgr.add_comment_on_text(para, "e", "Second 'e'", "Reviewer Name", occurrence=2)
+cid = mgr.add_comment_on_text(para, re.compile(r"\bsection\b"), "Rename?", "Reviewer Name")
+
+# Or give character offsets directly (end is exclusive, measured over the
+# paragraph's visible text)
+cid = mgr.add_comment(para, "First word", "Reviewer Name", start_char=0, end_char=6)
+```
+
+### Editing and reading back
+
+```python
+# Edit a comment in place — id, durable id, threading, resolution state,
+# and anchors are all preserved; only the content changes.
+mgr.edit_comment(comment_id, "Please review this section (updated)")
+
+# Optionally change author/initials/date at the same time
+from datetime import datetime, timezone
+
+mgr.edit_comment(
+    comment_id,
+    "Final wording agreed",
+    author="Editor Name",
+    initials="EN",
+    timestamp=datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc),
+)
+
+# Read back a single comment, its thread, and its anchor
+info = mgr.get_comment(comment_id)            # CommentInfo
+thread = mgr.get_thread(comment_id)           # CommentThread (root + replies)
+snippet = mgr.get_anchored_text(comment_id)   # anchored document text, or None
+para = mgr.get_comment_paragraph(comment_id)  # Paragraph with the anchor, or None
+```
+
+### Rich content and timestamps
+
+```python
+# text is one paragraph of plain text by default; pass a sequence of
+# paragraphs for more. Each paragraph is a str or a sequence of runs,
+# where a run is a str or (text, {"bold"/"italic"/"underline": True}).
+mgr.add_comment(
+    paragraph=doc.paragraphs[0],
+    text=[
+        [("Blocking:", {"bold": True}), " needs a citation."],
+        "See the style guide.",
+    ],
+    author="Reviewer Name",
+)
+
+# add_comment / reply_to_comment / edit_comment accept an explicit timestamp
+# (naive datetimes are interpreted as local time; the default is "now")
+mgr.add_comment(
+    paragraph=doc.paragraphs[0],
+    text="Imported from the previous review round",
+    author="Reviewer Name",
+    timestamp=datetime(2025, 3, 1, 9, 30, tzinfo=timezone.utc),
+)
+```
+
+### Errors
+
+Lookup failures raise typed exceptions that subclass the builtins previously
+raised, so existing `except ValueError` / `except KeyError` code keeps working:
+
+```python
+from docx_comments import CommentNotFoundError, PersonNotFoundError
+
+try:
+    mgr.get_comment("999999")
+except CommentNotFoundError:  # subclasses ValueError and LookupError
+    ...
+
+try:
+    mgr.get_person("Nobody")
+except PersonNotFoundError:  # subclasses KeyError
+    ...
+```
+
+Comment ids are strings, but every method that takes a comment id also
+accepts the `int` ids used by python-docx's native comments API:
+
+```python
+mgr.resolve_comment(int(comment_id))  # same comment as mgr.resolve_comment(comment_id)
+```
+
 ## Identity Linkage (people.xml)
 
 Word maps `w:comment/@w:author` to account identity using `word/people.xml`. By default, this library does
@@ -104,7 +207,7 @@ person = mgr.ensure_person("Reviewer Name")
 # Or fetch an existing person entry (raises if missing)
 try:
     person = mgr.get_person("Reviewer Name")
-except KeyError:
+except PersonNotFoundError:  # subclasses KeyError
     person = mgr.ensure_person("Reviewer Name")
 
 # Resolve a default author from the system or a DOCX source
@@ -156,6 +259,39 @@ person, initials = mgr.get_default_author_person(include_presence=True)
 
 If the DOCX contains more than one `w15:person` entry, a warning is raised and the resolver
 falls back to system user info.
+
+## API Summary
+
+All public `CommentManager` methods. Every method that takes a comment id
+accepts `str` or `int`.
+
+| Method | Description |
+| --- | --- |
+| `add_comment(paragraph, text, author, ...)` | Add an anchored comment: whole paragraph, run range, or `start_char`/`end_char` span |
+| `add_comment_on_text(paragraph, match, text, author, ...)` | Anchor a comment to the nth occurrence of a substring or regex |
+| `reply_to_comment(parent_id, text, author, ...)` | Add a threaded reply (inherits the thread's resolved state) |
+| `edit_comment(comment_id, text, ...)` | Replace a comment's text (and optionally author/initials/date) in place |
+| `resolve_comment(comment_id)` | Mark the comment's thread as resolved |
+| `unresolve_comment(comment_id)` | Mark the comment's thread as unresolved |
+| `set_comment_resolved(comment_id, resolved)` | Set the thread's resolved state explicitly |
+| `delete_comment(comment_id)` | Delete one comment (replies survive, detached) |
+| `delete_thread(comment_id)` | Delete an entire thread (root + replies) |
+| `move_comment(comment_id, paragraph, ...)` | Re-anchor a standalone comment (raises for threaded comments) |
+| `move_thread(comment_id, paragraph, ...)` | Re-anchor an entire thread, keeping reply anchors co-located |
+| `list_comments()` | Iterate `CommentInfo` for every comment in the document |
+| `get_comment(comment_id)` | Return one comment's `CommentInfo` (raises `CommentNotFoundError`) |
+| `get_thread(comment_id)` | Return the `CommentThread` containing a comment (root or reply) |
+| `get_comment_threads()` | All comments grouped into threads by root |
+| `get_anchored_text(comment_id)` | Document text the comment is anchored to (or `None`) |
+| `get_comment_paragraph(comment_id)` | Paragraph containing the comment's anchor (or `None`) |
+| `get_authors()` | Map of comment author names to initials |
+| `get_document_author()` | Document owner from core properties, with initials if known |
+| `get_people()` | List entries from `word/people.xml` |
+| `get_person(author)` | Fetch one people.xml entry (raises `PersonNotFoundError`) |
+| `ensure_person(author, presence=None)` | Create a people.xml entry if missing |
+| `merge_people_from(source, include_presence=False)` | Import missing people.xml entries from another document |
+| `get_default_author_person(...)` | Resolve a default author from the system or a DOCX source |
+| `migrate_comment_metadata()` | Backfill threading/durable-id/extensible metadata for comments created by other tools |
 
 ## OOXML Parts Handled
 

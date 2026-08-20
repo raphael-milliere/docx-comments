@@ -32,7 +32,7 @@ pytest
 pytest --cov=docx_comments
 
 # Specific test file
-pytest tests/test_basic.py -v
+pytest tests/test_manager_basic.py -v
 
 # Specific test by name
 pytest -k "test_add_comment"
@@ -44,13 +44,13 @@ Before submitting a PR, ensure your code passes all checks:
 
 ```bash
 # Linting
-ruff check src/
+ruff check src/ tests/
 
 # Formatting (check)
-ruff format --check src/
+ruff format --check src/ tests/
 
 # Formatting (fix)
-ruff format src/
+ruff format src/ tests/
 
 # Type checking
 mypy src/docx_comments
