@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import TYPE_CHECKING, Iterator, Optional, Tuple
 
 from lxml import etree
@@ -17,6 +18,7 @@ if TYPE_CHECKING:
 NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 NS_R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 NS_MC = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+NS_XML = "http://www.w3.org/XML/1998/namespace"
 
 REL_FOOTNOTES = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes"
 REL_ENDNOTES = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes"
@@ -298,6 +300,148 @@ class CommentAnchor:
         """
         self._validate_owned(paragraph)
         return self._resolve_anchor_span(paragraph._element, start_run, end_run)
+
+    def _iter_paragraph_atoms(self, para_elem):
+        """Yield (child, run, length, is_text) for text atoms in order.
+
+        Mirrors the comment-text extraction rules: w:t contributes its
+        characters, w:br/w:cr/w:tab one character each; runs inside
+        mc:Fallback or nested paragraphs (text boxes) are skipped.
+        """
+        p_tag = _qn(NS_W, "p")
+        fallback = _qn(NS_MC, "Fallback")
+        for run in para_elem.iter(_qn(NS_W, "r")):
+            skip = False
+            parent = run.getparent()
+            while parent is not None and parent is not para_elem:
+                if parent.tag == fallback or parent.tag == p_tag:
+                    skip = True
+                    break
+                parent = parent.getparent()
+            if skip:
+                continue
+            for child in run:
+                local = etree.QName(child).localname
+                if local == "t":
+                    yield child, run, len(child.text or ""), True
+                elif local in ("br", "cr", "tab"):
+                    yield child, run, 1, False
+
+    def paragraph_text(self, para_elem: etree._Element) -> str:
+        """The paragraph's visible text under the same rules as anchoring."""
+        pieces: list[str] = []
+        for child, _, _, is_text in self._iter_paragraph_atoms(para_elem):
+            if is_text:
+                pieces.append(child.text or "")
+            else:
+                local = etree.QName(child).localname
+                pieces.append("\t" if local == "tab" else "\n")
+        return "".join(pieces)
+
+    def _check_char_bounds(
+        self, para_elem: etree._Element, start_char: int, end_char: int
+    ) -> None:
+        if not isinstance(start_char, int) or not isinstance(end_char, int):
+            raise TypeError("start_char and end_char must be integers")
+        if start_char < 0 or end_char < 0:
+            raise IndexError("character offsets must be non-negative")
+        if end_char <= start_char:
+            raise ValueError(
+                f"end_char {end_char} must be greater than start_char {start_char}"
+            )
+        total = sum(
+            length for _, _, length, _ in self._iter_paragraph_atoms(para_elem)
+        )
+        if end_char > total:
+            raise IndexError(
+                f"end_char {end_char} out of range for paragraph with "
+                f"{total} character(s)"
+            )
+
+    def validate_char_span(
+        self, paragraph: Paragraph, start_char: int, end_char: int
+    ) -> None:
+        """Validate a character span without mutating anything."""
+        self._validate_owned(paragraph)
+        self._check_char_bounds(paragraph._element, start_char, end_char)
+
+    def _split_run_at_child(self, run, child):
+        """Split `run` immediately before `child`. Returns (left, right)."""
+        left = etree.Element(_qn(NS_W, "r"))
+        for key, value in run.attrib.items():
+            left.set(key, value)
+        rpr = run.find(_qn(NS_W, "rPr"))
+        if rpr is not None:
+            left.append(copy.deepcopy(rpr))
+        for sibling in list(run):
+            if sibling is child:
+                break
+            if sibling.tag == _qn(NS_W, "rPr"):
+                continue
+            left.append(sibling)  # moves the element out of `run`
+        run.addprevious(left)
+        return left, run
+
+    def _split_run_at_text(self, run, t_child, offset):
+        """Split a run inside its w:t at `offset` characters. Returns (left, right)."""
+        text = t_child.text or ""
+        left_run, right_run = self._split_run_at_child(run, t_child)
+        left_t = etree.SubElement(left_run, _qn(NS_W, "t"))
+        left_text = text[:offset]
+        left_t.text = left_text
+        if left_text.strip() != left_text:
+            left_t.set(_qn(NS_XML, "space"), "preserve")
+        right_text = text[offset:]
+        t_child.text = right_text
+        if right_text.strip() != right_text:
+            t_child.set(_qn(NS_XML, "space"), "preserve")
+        else:
+            t_child.attrib.pop(_qn(NS_XML, "space"), None)
+        return left_run, right_run
+
+    def _ensure_run_boundary(self, para_elem, pos):
+        """Make a run boundary exist at char offset `pos`.
+
+        Returns (run_ending_at_pos, run_starting_at_pos); either side is
+        None at the paragraph edges.
+        """
+        cum = 0
+        prev_run = None
+        for child, run, length, is_text in self._iter_paragraph_atoms(para_elem):
+            if cum == pos:
+                if prev_run is run:
+                    return self._split_run_at_child(run, child)
+                return prev_run, run
+            if cum < pos < cum + length:
+                return self._split_run_at_text(run, child, pos - cum)
+            cum += length
+            prev_run = run
+        return prev_run, None
+
+    def add_anchors_at_char_span(
+        self,
+        paragraph: Paragraph,
+        start_char: int,
+        end_char: int,
+        comment_id: str,
+    ) -> None:
+        """Anchor a comment to an exact character span, splitting runs.
+
+        Splitting preserves formatting (rPr is deep-copied) and whitespace
+        (xml:space="preserve" on chunks with edge whitespace); the
+        paragraph's visible text is unchanged.
+        """
+        self._validate_owned(paragraph)
+        para_elem = paragraph._element
+        self._check_char_bounds(para_elem, start_char, end_char)
+        # End boundary first: when both offsets fall inside one run, the
+        # start split keeps the original element as the right half (still
+        # ending at end_char), so last_run stays valid; splitting start
+        # first would let the end split re-split first_run and leave it
+        # pointing at the tail after end_char.
+        last_run, _ = self._ensure_run_boundary(para_elem, end_char)
+        _, first_run = self._ensure_run_boundary(para_elem, start_char)
+        self.add_anchors_at_span(paragraph, (first_run, last_run), comment_id)
 
     def _sync_containing_part(self, elem: etree._Element) -> None:
         """Persist the blob-backed part (if any) that owns this element."""

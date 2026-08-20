@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import random
+import re
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Iterator, Optional, Union
@@ -1017,6 +1018,8 @@ class CommentManager:
         initials: Optional[str] = None,
         start_run: int = 0,
         end_run: Optional[int] = None,
+        start_char: Optional[int] = None,
+        end_char: Optional[int] = None,
         person: Optional[PersonSpec] = None,
         timestamp: Optional[datetime] = None,
     ) -> str:
@@ -1037,6 +1040,13 @@ class CommentManager:
             start_run: Index of first run to anchor (default: 0). Python-style
                 negative indices are accepted; out-of-range indices raise.
             end_run: Index of last run to anchor (default: last run).
+            start_char: Character offset where the anchor starts, measured
+                over the paragraph's visible text (w:t characters, with
+                br/cr/tab each counting as one). Runs are split as needed;
+                the visible text is never changed. Must be given together
+                with end_char, and not combined with start_run/end_run.
+            end_char: End of the anchored span (exclusive), same coordinate
+                system as start_char.
             person: Optional people.xml entry to link author identity.
                 Accepts True (ensure an entry for the comment author), a str
                 author name or PersonInfo (must match the comment author), or
@@ -1062,7 +1072,17 @@ class CommentManager:
         _validate_xml_text(initials, "initials")
 
         anchor = CommentAnchor(self._document)
-        anchor.validate_anchor_target(paragraph, start_run, end_run)
+        use_char_span = start_char is not None or end_char is not None
+        if use_char_span:
+            if start_char is None or end_char is None:
+                raise ValueError("start_char and end_char must be provided together")
+            if start_run != 0 or end_run is not None:
+                raise ValueError(
+                    "pass either start_run/end_run or start_char/end_char, not both"
+                )
+            anchor.validate_char_span(paragraph, start_char, end_char)
+        else:
+            anchor.validate_anchor_target(paragraph, start_run, end_run)
 
         person_spec = person
         if person_spec is None and author_presence:
@@ -1094,12 +1114,17 @@ class CommentManager:
         )
 
         # 2. Add anchors to document.xml
-        anchor.add_anchors(
-            paragraph=paragraph,
-            comment_id=comment_id,
-            start_run=start_run,
-            end_run=end_run,
-        )
+        if start_char is not None and end_char is not None:
+            anchor.add_anchors_at_char_span(
+                paragraph, start_char, end_char, comment_id
+            )
+        else:
+            anchor.add_anchors(
+                paragraph=paragraph,
+                comment_id=comment_id,
+                start_run=start_run,
+                end_run=end_run,
+            )
 
         # 3. Add to commentsExtended.xml (root comment, no parent)
         ext_part = CommentsExtendedPart(self._document)
@@ -1117,6 +1142,68 @@ class CommentManager:
         )
 
         return comment_id
+
+    def add_comment_on_text(
+        self,
+        paragraph: Paragraph,
+        match: Union[str, re.Pattern[str]],
+        text: CommentContent,
+        author: PersonInfo,
+        initials: Optional[str] = None,
+        occurrence: int = 1,
+        person: Optional[PersonSpec] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> str:
+        """Anchor a comment to the nth occurrence of a substring or pattern.
+
+        Args:
+            paragraph: The paragraph to search (visible text; br/cr/tab
+                count as one character, matching get_anchored_text).
+            match: Substring or compiled regular expression to anchor.
+            occurrence: 1-based occurrence to anchor (default: first).
+            (other args as add_comment)
+
+        Returns:
+            The comment ID of the new comment.
+
+        Raises:
+            ValueError: If the match is empty, occurs fewer than
+                `occurrence` times, or matches zero characters.
+        """
+        if occurrence < 1:
+            raise ValueError("occurrence must be >= 1")
+        anchor = CommentAnchor(self._document)
+        para_text = anchor.paragraph_text(paragraph._element)
+        spans: list[tuple[int, int]] = []
+        if isinstance(match, re.Pattern):
+            spans = [m.span() for m in match.finditer(para_text)]
+            label = match.pattern
+        else:
+            if not match:
+                raise ValueError("match must be non-empty")
+            idx = para_text.find(match)
+            while idx != -1:
+                spans.append((idx, idx + len(match)))
+                idx = para_text.find(match, idx + 1)
+            label = match
+        if len(spans) < occurrence:
+            raise ValueError(
+                f"{label!r} occurs {len(spans)} time(s) in the paragraph; "
+                f"occurrence {occurrence} requested"
+            )
+        start_char, end_char = spans[occurrence - 1]
+        if start_char == end_char:
+            raise ValueError(f"{label!r} matches zero characters")
+        return self.add_comment(
+            paragraph,
+            text,
+            author,
+            initials=initials,
+            start_char=start_char,
+            end_char=end_char,
+            person=person,
+            timestamp=timestamp,
+        )
 
     def reply_to_comment(
         self,
