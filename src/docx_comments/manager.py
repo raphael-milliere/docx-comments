@@ -958,6 +958,7 @@ class CommentManager:
         start_run: int = 0,
         end_run: Optional[int] = None,
         person: Optional[PersonSpec] = None,
+        timestamp: Optional[datetime] = None,
     ) -> str:
         """
         Add a new anchored comment to a paragraph.
@@ -978,6 +979,8 @@ class CommentManager:
                 a dict with optional "author" and presence keys
                 ("provider_id"/"user_id" or a "presence" dict). None/False
                 leave people.xml untouched.
+            timestamp: Optional creation time. Naive datetimes are
+                interpreted as local time; None uses the current time.
 
         Returns:
             The comment ID of the new comment.
@@ -1022,6 +1025,7 @@ class CommentManager:
             text=text,
             author=author_name,
             initials=initials,
+            timestamp=timestamp,
         )
 
         # 2. Add anchors to document.xml
@@ -1056,6 +1060,7 @@ class CommentManager:
         author: PersonInfo,
         initials: Optional[str] = None,
         person: Optional[PersonSpec] = None,
+        timestamp: Optional[datetime] = None,
     ) -> str:
         """
         Reply to an existing comment.
@@ -1067,6 +1072,8 @@ class CommentManager:
             initials: Author initials (optional).
             person: Optional people.xml entry to link author identity (see
                 add_comment for the accepted forms).
+            timestamp: Optional creation time. Naive datetimes are
+                interpreted as local time; None uses the current time.
 
         Returns:
             The comment ID of the reply.
@@ -1150,6 +1157,7 @@ class CommentManager:
             text=text,
             author=author_name,
             initials=initials,
+            timestamp=timestamp,
         )
 
         # 2. Add anchors at the root comment location for Word threading compatibility.
@@ -1527,6 +1535,9 @@ class CommentManager:
         # Use local time with offset so Word displays the expected timestamp.
         if timestamp is None:
             timestamp = datetime.now().astimezone()
+        elif timestamp.tzinfo is None:
+            # Interpret naive datetimes as local time (matching the default).
+            timestamp = timestamp.astimezone()
         comment.set(
             _qn(NS_W, "date"),
             timestamp.isoformat(timespec="seconds"),
