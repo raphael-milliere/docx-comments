@@ -259,3 +259,92 @@ class TestEditComment:
         before = etree.tostring(doc.element.body)
         mgr.edit_comment(cid, "new")
         assert etree.tostring(doc.element.body) == before
+
+
+class TestMigrationSkip:
+    """resolve/delete skip migrate_comment_metadata when metadata is complete."""
+
+    def _spy(self, monkeypatch):
+        calls = []
+        original = CommentManager.migrate_comment_metadata
+
+        def wrapper(self):
+            calls.append(1)
+            original(self)
+
+        monkeypatch.setattr(CommentManager, "migrate_comment_metadata", wrapper)
+        return calls
+
+    def test_resolve_skips_migration_when_complete(self, monkeypatch):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"))
+        calls = self._spy(monkeypatch)
+        mgr.resolve_comment(cid)
+        assert calls == []
+        assert mgr.get_comment(cid).is_resolved
+
+    def test_delete_skips_migration_when_complete(self, monkeypatch):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"))
+        calls = self._spy(monkeypatch)
+        mgr.delete_comment(cid)
+        assert calls == []
+        assert list(mgr.list_comments()) == []
+
+    def test_delete_thread_skips_migration_when_complete(self, monkeypatch):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"))
+        mgr.reply_to_comment(cid, "r", PersonInfo(author="B"))
+        calls = self._spy(monkeypatch)
+        mgr.delete_thread(cid)
+        assert calls == []
+        assert list(mgr.list_comments()) == []
+
+    def test_incomplete_metadata_still_migrates(self, monkeypatch):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"))
+        # Strip the paraId to simulate a foreign/legacy comment.
+        for p in mgr._comments_xml.iter(qn(NS_W, "p")):
+            p.attrib.pop(qn(NS_W14, "paraId"), None)
+        calls = self._spy(monkeypatch)
+        mgr.resolve_comment(cid)
+        assert calls == [1]
+        assert mgr.get_comment(cid).is_resolved
+
+    def test_orphan_threading_entry_still_migrates(self, monkeypatch):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"))
+        CommentsExtendedPart(doc).add_comment_ex(para_id="DEADBEEF", done=False)
+        calls = self._spy(monkeypatch)
+        mgr.resolve_comment(cid)
+        assert calls == [1]
+        # The migration removes the orphan entry.
+        assert "DEADBEEF" not in CommentsExtendedPart(doc).get_threading_info()
+
+    def test_dangling_parent_still_migrates(self, monkeypatch):
+        doc = Document()
+        para = doc.add_paragraph("text")
+        mgr = CommentManager(doc)
+        cid = mgr.add_comment(para, "c", PersonInfo(author="A"))
+        info = mgr.get_comment(cid)
+        CommentsExtendedPart(doc).set_parent(info.para_id, "DEADBEEF")
+        calls = self._spy(monkeypatch)
+        mgr.resolve_comment(cid)
+        assert calls == [1]
+
+    def test_metadata_complete_false_when_parts_missing(self):
+        # migrate_comment_metadata is not a no-op on a document without
+        # comment parts (it creates them), so the check must return False.
+        doc = Document()
+        mgr = CommentManager(doc)
+        assert mgr._metadata_complete() is False

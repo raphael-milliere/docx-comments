@@ -359,6 +359,60 @@ class CommentManager:
             if parent and parent not in valid_para_ids:
                 ext_part.set_parent(para_id, None)
 
+    def _metadata_complete(self) -> bool:
+        """Cheap check whether migrate_comment_metadata would be a no-op.
+
+        Reads only comments.xml and the satellite parts (no body scan), so
+        callers can skip the full migration on well-formed documents. Any
+        incompleteness — missing parts, missing paraId/textId, missing
+        threading/durable/extensible entries, orphan entries, dangling
+        parents — returns False and the caller runs the real migration.
+        """
+        # migrate_comment_metadata creates any missing part outright, so a
+        # missing part alone already means it would not be a no-op.
+        if (
+            CommentsPart(self._document)._get_part() is None
+            or CommentsExtendedPart(self._document)._get_part() is None
+            or CommentsIdsPart(self._document)._get_part() is None
+            or CommentsExtensiblePart(self._document)._get_part() is None
+        ):
+            return False
+
+        threading = CommentsExtendedPart(self._document).get_threading_info()
+        durable_ids = CommentsIdsPart(self._document).get_durable_ids()
+        extensible = CommentsExtensiblePart(self._document).get_extensible_info()
+
+        valid_para_ids: set[str] = set()
+        for comment_elem in self._comments_xml.findall(_qn(NS_W, "comment")):
+            para_ids: list[str] = []
+            for para in comment_elem.findall(_qn(NS_W, "p")):
+                pid = para.get(_qn(NS_W14, "paraId"))
+                if not pid or not para.get(_qn(NS_W14, "textId")):
+                    return False
+                para_ids.append(pid)
+                valid_para_ids.add(pid)
+            if not para_ids:
+                continue
+            primary = self._primary_para_id(para_ids, threading, durable_ids)
+            if primary not in threading:
+                return False
+            durable = durable_ids.get(primary)
+            if not durable:
+                return False
+            if not (extensible.get(durable) or {}).get("date_utc"):
+                return False
+
+        for pid, info in threading.items():
+            if pid not in valid_para_ids:
+                return False  # orphan commentEx entry
+            parent = info.get("parent_para_id")
+            if parent and parent not in valid_para_ids:
+                return False  # dangling reply link
+        for pid in durable_ids:
+            if pid not in valid_para_ids:
+                return False  # orphan commentId entry
+        return True
+
     def migrate_comment_metadata(self) -> None:
         """
         Backfill missing comment metadata in existing documents.
@@ -1417,7 +1471,8 @@ class CommentManager:
         if not self._comment_id_exists(comment_id):
             raise CommentNotFoundError(f"Comment {comment_id} not found")
 
-        self.migrate_comment_metadata()
+        if not self._metadata_complete():
+            self.migrate_comment_metadata()
 
         thread_comments = self._thread_comments_for(comment_id)
         ext_part = CommentsExtendedPart(self._document)
@@ -1443,7 +1498,8 @@ class CommentManager:
         if not self._comment_id_exists(comment_id):
             raise CommentNotFoundError(f"Comment {comment_id} not found")
 
-        self.migrate_comment_metadata()
+        if not self._metadata_complete():
+            self.migrate_comment_metadata()
 
         # Remove anchors first so a failure cannot leave anchors referencing
         # a comment that no longer exists.
@@ -1474,7 +1530,8 @@ class CommentManager:
         if not self._comment_id_exists(comment_id):
             raise CommentNotFoundError(f"Comment {comment_id} not found")
 
-        self.migrate_comment_metadata()
+        if not self._metadata_complete():
+            self.migrate_comment_metadata()
         thread_comments = self._thread_comments_for(comment_id)
 
         handler = self._comments_part()
